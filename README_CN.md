@@ -89,6 +89,17 @@ cd ~/cli-proxy
 docker compose pull && docker compose up -d
 ```
 
+### 从源码构建部署
+
+如果你对代码进行了修改（例如添加新模型、修复 bug 等），需要从源码构建而不是拉取远程镜像：
+
+```bash
+# 构建并启动（跳过远程拉取，使用本地构建）
+docker compose up -d --build --pull never
+```
+
+> **注意**：`docker-compose.yml` 中默认配置了 `pull_policy: always`，如果直接使用 `docker compose up -d`，即使你先执行了 `docker compose build`，容器启动时也会从远程拉取镜像覆盖你的本地构建。务必加上 `--pull never` 参数。
+
 ## 贡献
 
 该项目仅接受第三方供应商支持的 Pull Request。任何非第三方供应商支持的 Pull Request 都将被拒绝。

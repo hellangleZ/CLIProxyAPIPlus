@@ -135,13 +135,30 @@ func parseCopilotModels(body []byte) []*registry.ModelInfo {
 		if strings.TrimSpace(ownedBy) == "" {
 			ownedBy = "github-copilot"
 		}
-		models = append(models, &registry.ModelInfo{
+		info := &registry.ModelInfo{
 			ID:      modelID,
 			Object:  "model",
 			Created: created,
 			OwnedBy: ownedBy,
 			Type:    "github-copilot",
-		})
+		}
+
+		// Merge metadata from static model definitions (SupportedEndpoints, ContextLength, etc.)
+		if staticInfo := findStaticCopilotModel(modelID); staticInfo != nil {
+			info.SupportedEndpoints = staticInfo.SupportedEndpoints
+			info.ContextLength = staticInfo.ContextLength
+			info.MaxCompletionTokens = staticInfo.MaxCompletionTokens
+			info.DisplayName = staticInfo.DisplayName
+			info.Description = staticInfo.Description
+			info.Thinking = staticInfo.Thinking
+		} else {
+			// For models not in the static list, infer defaults from the model name
+			info.SupportedEndpoints = inferSupportedEndpoints(modelID)
+			info.ContextLength = 200000
+			info.MaxCompletionTokens = 64000
+		}
+
+		models = append(models, info)
 	}
 
 	data := gjson.GetBytes(body, "data")
@@ -230,4 +247,32 @@ func cloneModelInfos(models []*registry.ModelInfo) []*registry.ModelInfo {
 	out := make([]*registry.ModelInfo, len(models))
 	copy(out, models)
 	return out
+}
+
+// findStaticCopilotModel looks up a model by ID in the static GitHub Copilot model list.
+// Returns nil if no match is found.
+func findStaticCopilotModel(modelID string) *registry.ModelInfo {
+	for _, m := range registry.GetGitHubCopilotModels() {
+		if m.ID == modelID {
+			return m
+		}
+	}
+	return nil
+}
+
+// inferSupportedEndpoints determines the likely supported endpoints for a model
+// that is not in the static list, based on naming conventions:
+//   - *codex* models → /responses only
+//   - gpt-5+, o1, o3, o4 models → /chat/completions + /responses
+//   - Claude, Gemini, and others → /chat/completions only
+func inferSupportedEndpoints(modelID string) []string {
+	lower := strings.ToLower(modelID)
+	if strings.Contains(lower, "codex") {
+		return []string{"/responses"}
+	}
+	if strings.HasPrefix(lower, "gpt-5") || strings.HasPrefix(lower, "o1") || strings.HasPrefix(lower, "o3") || strings.HasPrefix(lower, "o4") {
+		return []string{"/chat/completions", "/responses"}
+	}
+	// Claude, Gemini, and other providers default to chat completions only
+	return []string{"/chat/completions"}
 }

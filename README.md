@@ -89,6 +89,17 @@ cd ~/cli-proxy
 docker compose pull && docker compose up -d
 ```
 
+### Deploy from Source
+
+If you have modified the code locally (e.g. adding new models, fixing bugs), you must build from source instead of pulling the remote image:
+
+```bash
+# Build and start (skip remote pull, use local build)
+docker compose up -d --build --pull never
+```
+
+> **Important**: The `docker-compose.yml` has `pull_policy: always` by default. If you run `docker compose up -d` without `--pull never`, the remote image will be pulled and **overwrite your local build**, even if you ran `docker compose build` beforehand. Always use `--pull never` when deploying local changes.
+
 ## Contributing
 
 This project only accepts pull requests that relate to third-party provider support. Any pull requests unrelated to third-party provider support will be rejected.

@@ -833,11 +833,13 @@ func (s *Service) registerModelsForAuth(a *coreauth.Auth) {
 		models = applyExcludedModels(models, excluded)
 	case "github-copilot":
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		models = executor.FetchGitHubCopilotModels(ctx, a, s.cfg)
+		dynamicModels := executor.FetchGitHubCopilotModels(ctx, a, s.cfg)
 		cancel()
-		if len(models) == 0 {
-			models = registry.GetGitHubCopilotModels()
-		}
+		staticModels := registry.GetGitHubCopilotModels()
+		// Merge dynamic and static models, preferring dynamic when IDs overlap.
+		// This ensures new models from the static list are available even when the
+		// dynamic API has not yet added them (e.g. claude-opus-4.6).
+		models = mergeModelLists(dynamicModels, staticModels)
 		models = applyExcludedModels(models, excluded)
 	case "kiro":
 		models = s.fetchKiroModels(a)
@@ -1073,6 +1075,42 @@ func (s *Service) oauthExcludedModels(provider, authKind string) []string {
 		return nil
 	}
 	return cfg.OAuthExcludedModels[providerKey]
+}
+
+// mergeModelLists merges dynamic and static model lists, preferring dynamic models when IDs overlap.
+// This ensures new models from the API are used, while keeping static models as fallback.
+func mergeModelLists(dynamic, static []*ModelInfo) []*ModelInfo {
+	if len(dynamic) == 0 {
+		return static
+	}
+	if len(static) == 0 {
+		return dynamic
+	}
+
+	seen := make(map[string]struct{}, len(dynamic)+len(static))
+	merged := make([]*ModelInfo, 0, len(dynamic)+len(static))
+
+	for _, model := range dynamic {
+		if model == nil || model.ID == "" {
+			continue
+		}
+		if _, exists := seen[model.ID]; !exists {
+			merged = append(merged, model)
+			seen[model.ID] = struct{}{}
+		}
+	}
+
+	for _, model := range static {
+		if model == nil || model.ID == "" {
+			continue
+		}
+		if _, exists := seen[model.ID]; !exists {
+			merged = append(merged, model)
+			seen[model.ID] = struct{}{}
+		}
+	}
+
+	return merged
 }
 
 func applyExcludedModels(models []*ModelInfo, excluded []string) []*ModelInfo {
