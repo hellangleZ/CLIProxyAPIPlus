@@ -32,12 +32,14 @@ const (
 	// maxScannerBufferSize is the maximum buffer size for SSE scanning (20MB).
 	maxScannerBufferSize = 20_971_520
 
-	// Copilot API header values.
-	copilotUserAgent     = "GithubCopilot/1.0"
-	copilotEditorVersion = "vscode/1.100.0"
-	copilotPluginVersion = "copilot/1.300.0"
+	// Copilot API header values — keep in sync with latest copilot-api / VS Code.
+	copilotChatVersion   = "0.26.7"
+	copilotUserAgent     = "GitHubCopilotChat/" + copilotChatVersion
+	copilotEditorVersion = "vscode/1.109.0"
+	copilotPluginVersion = "copilot-chat/" + copilotChatVersion
 	copilotIntegrationID = "vscode-chat"
 	copilotOpenAIIntent  = "conversation-panel"
+	copilotAPIVersion    = "2025-04-01"
 )
 
 // GitHubCopilotExecutor handles requests to the GitHub Copilot API.
@@ -423,7 +425,9 @@ func (e *GitHubCopilotExecutor) applyHeaders(r *http.Request, apiToken string) {
 	r.Header.Set("Editor-Plugin-Version", copilotPluginVersion)
 	r.Header.Set("Openai-Intent", copilotOpenAIIntent)
 	r.Header.Set("Copilot-Integration-Id", copilotIntegrationID)
+	r.Header.Set("X-Github-Api-Version", copilotAPIVersion)
 	r.Header.Set("X-Request-Id", uuid.NewString())
+	r.Header.Set("X-Vscode-User-Agent-Library-Version", "electron-fetch")
 }
 
 // detectVisionContent checks if the request body contains vision/image content.

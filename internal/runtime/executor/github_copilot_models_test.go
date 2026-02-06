@@ -54,6 +54,20 @@ func TestParseCopilotModelsCreatedAtFallback(t *testing.T) {
 	}
 }
 
+func TestParseCopilotModelsVendorField(t *testing.T) {
+	body := []byte(`{"data":[{"id":"claude-opus-4.6","vendor":"anthropic"},{"id":"gpt-5","owned_by":"openai"}]}`)
+	models := parseCopilotModels(body)
+	if len(models) != 2 {
+		t.Fatalf("expected 2 models, got %d", len(models))
+	}
+	if models[0].OwnedBy != "anthropic" {
+		t.Fatalf("expected vendor 'anthropic' for claude-opus-4.6, got %q", models[0].OwnedBy)
+	}
+	if models[1].OwnedBy != "openai" {
+		t.Fatalf("expected owned_by 'openai' for gpt-5, got %q", models[1].OwnedBy)
+	}
+}
+
 func collectModelIDs(models []*registry.ModelInfo) []string {
 	ids := make([]string, 0, len(models))
 	for _, model := range models {

@@ -13,6 +13,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/registry"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
 	"github.com/router-for-me/CLIProxyAPI/v6/sdk/config"
+	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 )
 
@@ -45,6 +46,7 @@ func FetchGitHubCopilotModels(ctx context.Context, auth *cliproxyauth.Auth, cfg 
 		accessToken = strings.TrimSpace(auth.Attributes["access_token"])
 	}
 	if accessToken == "" {
+		log.Debug("[copilot-models] access_token not found in auth metadata or attributes")
 		return nil
 	}
 
@@ -55,6 +57,7 @@ func FetchGitHubCopilotModels(ctx context.Context, auth *cliproxyauth.Auth, cfg 
 	copilotAuth := copilotauth.NewCopilotAuth(cfg)
 	apiToken, err := copilotAuth.GetCopilotAPIToken(ctx, accessToken)
 	if err != nil || apiToken == nil || apiToken.Token == "" {
+		log.Warnf("[copilot-models] failed to get Copilot API token: %v", err)
 		return nil
 	}
 
@@ -68,6 +71,7 @@ func FetchGitHubCopilotModels(ctx context.Context, auth *cliproxyauth.Auth, cfg 
 		applyCopilotModelHeaders(req, apiToken.Token)
 		resp, errDo := httpClient.Do(req)
 		if errDo != nil {
+			log.Debugf("[copilot-models] request to %s failed: %v", path, errDo)
 			if errors.Is(errDo, context.Canceled) || errors.Is(errDo, context.DeadlineExceeded) {
 				return nil
 			}
@@ -80,11 +84,13 @@ func FetchGitHubCopilotModels(ctx context.Context, auth *cliproxyauth.Auth, cfg 
 			continue
 		}
 		if !isHTTPSuccess(resp.StatusCode) {
+			log.Debugf("[copilot-models] %s returned status %d", path, resp.StatusCode)
 			continue
 		}
 
 		models := parseCopilotModels(body)
 		if len(models) > 0 {
+			log.Infof("[copilot-models] fetched %d models dynamically from Copilot API", len(models))
 			storeCopilotModelsInCache(accessToken, models)
 			return cloneModelInfos(models)
 		}
@@ -96,11 +102,14 @@ func FetchGitHubCopilotModels(ctx context.Context, auth *cliproxyauth.Auth, cfg 
 func applyCopilotModelHeaders(r *http.Request, apiToken string) {
 	r.Header.Set("Authorization", "Bearer "+apiToken)
 	r.Header.Set("Accept", "application/json")
+	r.Header.Set("Content-Type", "application/json")
 	r.Header.Set("User-Agent", copilotUserAgent)
 	r.Header.Set("Editor-Version", copilotEditorVersion)
 	r.Header.Set("Editor-Plugin-Version", copilotPluginVersion)
 	r.Header.Set("Openai-Intent", copilotOpenAIIntent)
 	r.Header.Set("Copilot-Integration-Id", copilotIntegrationID)
+	r.Header.Set("X-Github-Api-Version", copilotAPIVersion)
+	r.Header.Set("X-Vscode-User-Agent-Library-Version", "electron-fetch")
 }
 
 func parseCopilotModels(body []byte) []*registry.ModelInfo {
@@ -140,7 +149,11 @@ func parseCopilotModels(body []byte) []*registry.ModelInfo {
 	case data.Exists() && data.IsArray():
 		for _, item := range data.Array() {
 			if item.IsObject() {
-				addModel(item.Get("id").String(), item.Get("owned_by").String(), modelCreatedAt(item))
+				ownedBy := item.Get("owned_by").String()
+				if ownedBy == "" {
+					ownedBy = item.Get("vendor").String()
+				}
+				addModel(item.Get("id").String(), ownedBy, modelCreatedAt(item))
 				continue
 			}
 			if item.Type == gjson.String {
