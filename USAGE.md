@@ -1025,3 +1025,116 @@ curl -s -X POST 'http://localhost:8317/v1/messages?beta=true' \
 ```
 
 所有请求都应返回 `"type": "message"` 和有效的回复内容。
+
+---
+
+## 新模型上线维护指南
+
+当 Anthropic 发布新版本 Claude 模型（例如未来的 `claude-opus-5.0`、`claude-sonnet-5.0` 等），需要修改 **3 个地方** 才能让代理完整支持：
+
+### 需要改的地方
+
+#### 1. `config.yaml` — 添加模型别名
+
+在 `oauth-model-alias.github-copilot` 下添加新模型的别名映射：
+
+```yaml
+oauth-model-alias:
+  github-copilot:
+    # ... 现有别名 ...
+
+    # === 新模型示例（假设 claude-opus-5.0 上线）===
+    - name: "claude-opus-5.0"        # 代理中的模型名（点号格式）
+      alias: "opus5"                 # 简短别名，方便 /model opus5 切换
+      fork: true
+    - name: "claude-opus-5.0"
+      alias: "claude-opus-5-0"       # CLI 连字符格式
+      fork: true
+    - name: "claude-opus-5.0"
+      alias: "claude-opus-5-0-20260101"  # CLI 带日期后缀的格式
+      fork: true
+```
+
+**关键**：你需要知道 Claude Code CLI 实际发送的模型名格式。可以通过开启 `debug: true` 然后在 CLI 中 `/model xxx` 切换，查看日志中 CLI 发送的具体模型名。
+
+#### 2. `internal/registry/model_definitions.go` — 添加模型定义
+
+在 `GetGitHubCopilotModels()` 函数中添加新模型条目，**务必包含 `Thinking` 字段**：
+
+```go
+{
+    ID:                  "claude-opus-5.0",
+    Object:              "model",
+    Created:             now,
+    OwnedBy:             "github-copilot",
+    Type:                "github-copilot",
+    DisplayName:         "Claude Opus 5.0",
+    Description:         "Anthropic Claude Opus 5.0 via GitHub Copilot",
+    ContextLength:       200000,
+    MaxCompletionTokens: 64000,
+    SupportedEndpoints:  []string{"/chat/completions"},
+    Thinking:            &ThinkingSupport{Min: 1024, Max: 32000, ZeroAllowed: true, DynamicAllowed: true},
+    // ⚠️ Thinking 字段必须加！否则会出现 400 output_config.effort 错误
+},
+```
+
+#### 3. `~/.claude/settings.json` — 更新 CLI 环境变量（可选）
+
+如果要让 CLI 默认使用新模型：
+
+```json
+{
+  "env": {
+    "ANTHROPIC_MODEL": "claude-sonnet-5.0",
+    "ANTHROPIC_LARGE_REASONING_MODEL": "claude-opus-5.0"
+  }
+}
+```
+
+### 修改后的操作步骤
+
+```bash
+# 1. 修改上述文件
+# 2. 重新构建 Docker（因为改了 .go 代码）
+docker compose build --no-cache
+docker compose up -d
+
+# 3. 验证新模型在列表中
+curl -s http://localhost:8317/v1/models \
+  -H "Authorization: Bearer your-api-key-1" | python3 -c \
+  "import json,sys; [print(m['id']) for m in json.load(sys.stdin)['data'] if 'opus-5' in m['id']]"
+
+# 4. 测试新模型能正常响应
+curl -s -X POST 'http://localhost:8317/v1/messages?beta=true' \
+  -H 'Authorization: Bearer your-api-key-1' \
+  -H 'Content-Type: application/json' \
+  -H 'Anthropic-Version: 2023-06-01' \
+  -d '{"model":"claude-opus-5.0","max_tokens":50,"messages":[{"role":"user","content":"hi"}]}'
+```
+
+### 如何确定 CLI 发送的模型名？
+
+Claude Code CLI 内部会对模型名做转换，发送的名字和你输入的不一样。确认方法：
+
+```bash
+# 1. 开启 debug 模式
+# 在 config.yaml 中设置 debug: true，然后 docker compose restart
+
+# 2. 在 CLI 中切换到新模型
+# /model 新模型名
+
+# 3. 看日志中 CLI 实际发送的模型名
+docker logs --tail 20 cli-proxy-api-plus
+# 找到类似 "unknown provider for model xxx" 的行，xxx 就是 CLI 发送的真实模型名
+
+# 4. 把这个真实模型名加到 config.yaml 的 alias 中
+```
+
+### 速查表：每种修改对应的操作
+
+| 场景 | 改 config.yaml | 改 .go 代码 | 重建 Docker | 重启容器 |
+|------|:-:|:-:|:-:|:-:|
+| 只加别名 | ✅ | ❌ | ❌ | ✅ restart |
+| 新模型（GitHub Copilot 已支持） | ✅ | ✅ | ✅ build | ✅ up -d |
+| 新模型（GitHub Copilot 未支持） | 等 Copilot 支持后再加 | — | — | — |
+| 修改 Thinking 参数 | ❌ | ✅ | ✅ build | ✅ up -d |
