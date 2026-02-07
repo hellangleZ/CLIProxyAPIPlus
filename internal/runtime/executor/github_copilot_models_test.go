@@ -124,14 +124,14 @@ func TestParseCopilotModelsInferEndpointsForUnknownModel(t *testing.T) {
 	// Unknown Claude model → /chat/completions
 	assertEndpoints(t, models[0], []string{"/chat/completions"})
 
-	// Unknown gpt-5.x model → both endpoints
-	assertEndpoints(t, models[1], []string{"/chat/completions", "/responses"})
+	// Unknown gpt-5.x model → /responses (GPT/OpenAI series via Copilot)
+	assertEndpoints(t, models[1], []string{"/responses"})
 
 	// Unknown codex model → /responses only
 	assertEndpoints(t, models[2], []string{"/responses"})
 
-	// o4-mini → both endpoints
-	assertEndpoints(t, models[3], []string{"/chat/completions", "/responses"})
+	// o4-mini → /responses (OpenAI reasoning series via Copilot)
+	assertEndpoints(t, models[3], []string{"/responses"})
 }
 
 func TestParseCopilotModelsInferDefaultContextLength(t *testing.T) {
@@ -178,12 +178,12 @@ func TestInferSupportedEndpoints(t *testing.T) {
 		{"claude-opus-5", []string{"/chat/completions"}},
 		{"claude-sonnet-5", []string{"/chat/completions"}},
 		{"gemini-3-pro", []string{"/chat/completions"}},
-		{"gpt-5.5", []string{"/chat/completions", "/responses"}},
-		{"gpt-5.5-mini", []string{"/chat/completions", "/responses"}},
+		{"gpt-5.5", []string{"/responses"}},
+		{"gpt-5.5-mini", []string{"/responses"}},
 		{"gpt-5.5-codex", []string{"/responses"}},
-		{"o1-preview", []string{"/chat/completions", "/responses"}},
-		{"o3-mini", []string{"/chat/completions", "/responses"}},
-		{"o4-mini", []string{"/chat/completions", "/responses"}},
+		{"o1-preview", []string{"/responses"}},
+		{"o3-mini", []string{"/responses"}},
+		{"o4-mini", []string{"/responses"}},
 		{"some-random-model", []string{"/chat/completions"}},
 	}
 

@@ -791,3 +791,237 @@ docker compose up -d --pull never
 ```
 
 或者临时改 `docker-compose.yml` 中的 `pull_policy: always` 为 `pull_policy: never`。
+
+---
+
+## Claude Code CLI 集成
+
+### 基本配置
+
+在 `~/.claude/settings.json` 中配置环境变量，让 Claude Code CLI 通过本代理发送请求：
+
+```json
+{
+  "env": {
+    "ANTHROPIC_BASE_URL": "http://localhost:8317",
+    "ANTHROPIC_AUTH_TOKEN": "your-api-key-1"
+  }
+}
+```
+
+### 模型设置
+
+Claude Code CLI 内部使用多个模型，可以通过环境变量分别指定：
+
+```json
+{
+  "env": {
+    "ANTHROPIC_BASE_URL": "http://localhost:8317",
+    "ANTHROPIC_AUTH_TOKEN": "your-api-key-1",
+    "ANTHROPIC_MODEL": "claude-sonnet-4.5",
+    "ANTHROPIC_SMALL_FAST_MODEL": "claude-haiku-4.5",
+    "ANTHROPIC_LARGE_REASONING_MODEL": "claude-opus-4.6"
+  }
+}
+```
+
+| 环境变量 | 用途 | 推荐值 |
+|----------|------|--------|
+| `ANTHROPIC_MODEL` | 主模型（日常对话、编码） | `claude-sonnet-4.5` |
+| `ANTHROPIC_SMALL_FAST_MODEL` | 轻量模型（快速任务） | `claude-haiku-4.5` |
+| `ANTHROPIC_LARGE_REASONING_MODEL` | 重量推理模型（复杂任务） | `claude-opus-4.6` |
+
+### 在 CLI 中切换模型
+
+Claude Code CLI 支持 `/model` 命令实时切换模型。以下是所有可用的模型名和别名：
+
+| CLI 命令 | 实际模型 | 说明 |
+|----------|---------|------|
+| `/model opus` | `claude-opus-4.6` | 简短别名 ✅ |
+| `/model claude-opus-4.6` | `claude-opus-4.6` | 完整名 ✅ |
+| `/model claude-opus-4-6` | `claude-opus-4.6` | CLI 内部格式，自动映射 ✅ |
+| `/model sonnet` | `claude-sonnet-4.5` | 简短别名 ✅ |
+| `/model claude-sonnet-4.5` | `claude-sonnet-4.5` | 完整名 ✅ |
+| `/model claude-sonnet-4-5-20250929` | `claude-sonnet-4.5` | CLI 日期格式，自动映射 ✅ |
+| `/model haiku` | `claude-haiku-4.5` | 简短别名 ✅ |
+| `/model claude-haiku-4.5` | `claude-haiku-4.5` | 完整名 ✅ |
+| `/model claude-haiku-4-5-20251001` | `claude-haiku-4.5` | CLI 日期格式，自动映射 ✅ |
+
+> **注意**：CLI 的 `/model opus` 命令内部会发送 `claude-opus-4-6`（连字符格式），代理会自动映射到 `claude-opus-4.6`（点号格式）。这一切都是透明的。
+
+### Task (子 Agent) 调用
+
+Claude Code CLI 的 Task 工具（子 Agent 系统）也完全支持。子 Agent 使用 `model` 参数指定模型时，代理会自动处理别名映射：
+
+```
+# 在 Claude Code 中使用 Task 工具
+Task(subagent_type="Explore", model="haiku", prompt="...")   # ✅ 自动映射到 claude-haiku-4.5
+Task(subagent_type="general-purpose", model="sonnet", prompt="...")  # ✅ 自动映射到 claude-sonnet-4.5
+Task(subagent_type="Explore", model="opus", prompt="...")    # ✅ 自动映射到 claude-opus-4.6
+```
+
+---
+
+## 已知坑点和注意事项
+
+### ⚠️ 坑 1：Docker 本地构建 vs 远程拉取
+
+**问题**：修改了本地代码后 `docker compose up -d`，发现改动没有生效。
+
+**原因**：`docker-compose.yml` 中的 `pull_policy` 设置错误。如果设为 `always`，Docker 会优先拉取远程镜像 `eceasy/cli-proxy-api-plus:latest`，你本地代码的改动会被完全覆盖。
+
+**解决方案**：
+
+```yaml
+# docker-compose.yml
+services:
+  cli-proxy-api:
+    image: ${CLI_PROXY_IMAGE:-eceasy/cli-proxy-api-plus:latest}
+    pull_policy: build    # ⭐ 使用本地代码构建，不要用 always
+    build:
+      context: .
+      dockerfile: Dockerfile
+```
+
+- `pull_policy: build` → 使用本地 Dockerfile 构建（修改了代码时用这个）
+- `pull_policy: always` → 始终拉取远程镜像（不改代码、直接用官方版时用这个）
+
+**正确的本地代码构建流程**：
+
+```bash
+# 1. 确保 pull_policy 是 build
+# 2. 构建（--no-cache 确保不用旧缓存）
+docker compose build --no-cache
+# 3. 启动
+docker compose up -d
+```
+
+### ⚠️ 坑 2：模型别名 fork 参数
+
+**问题**：配置了 `oauth-model-alias` 后，原模型名消失了，所有请求 502。
+
+**原因**：默认情况下 `fork: false`，别名会**替换**原模型名。
+
+**解决方案**：始终加 `fork: true` 保留原名：
+
+```yaml
+oauth-model-alias:
+  github-copilot:
+    - name: "claude-opus-4.6"
+      alias: "opus"
+      fork: true     # ⭐ 必须加！否则 claude-opus-4.6 会从模型列表消失
+```
+
+### ⚠️ 坑 3：CLI 发送的模型名和代理定义不一致
+
+**问题**：Claude Code CLI 在 `/model sonnet` 时发送的模型名是 `claude-sonnet-4-5-20250929`（带日期后缀、用连字符），而代理中定义的是 `claude-sonnet-4.5`（点号、无日期）。
+
+**解决方案**：在 `config.yaml` 中配置完整的别名映射：
+
+```yaml
+oauth-model-alias:
+  github-copilot:
+    # 简短别名
+    - name: "claude-opus-4.6"
+      alias: "opus"
+      fork: true
+    - name: "claude-sonnet-4.5"
+      alias: "sonnet"
+      fork: true
+    - name: "claude-haiku-4.5"
+      alias: "haiku"
+      fork: true
+    # CLI 内部使用的格式（连字符 + 日期后缀）
+    - name: "claude-opus-4.6"
+      alias: "claude-opus-4-6"
+      fork: true
+    - name: "claude-sonnet-4.5"
+      alias: "claude-sonnet-4-5-20250929"
+      fork: true
+    - name: "claude-haiku-4.5"
+      alias: "claude-haiku-4-5-20251001"
+      fork: true
+```
+
+### ⚠️ 坑 4：Thinking 参数导致 400 错误
+
+**问题**：使用 `claude-opus-4.6` 时返回 `400 output_config.effort: Input should be 'low', 'medium', 'high' or 'max'`。
+
+**原因**：两个因素叠加：
+1. `model_definitions.go` 中模型缺少 `Thinking` 字段定义 → 代理不知道如何处理 thinking 参数
+2. CLI 发送 `thinking.budget_tokens=31999`，被转换为无效的 effort 值 `xhigh`（上游只接受 low/medium/high/max）
+
+**解决方案**（已在代码中修复）：
+1. 在 `internal/registry/model_definitions.go` 中给 `claude-opus-4.6`、`claude-sonnet-4.5`、`claude-haiku-4.5` 添加 `Thinking` 字段
+2. 在 `internal/translator/openai/claude/openai_claude_request.go` 中添加 `normalizeReasoningEffort()` 函数，将 `xhigh` → `high`
+
+### ⚠️ 坑 5：config.yaml 修改 vs 代码修改
+
+| 改了什么 | 需要做什么 |
+|----------|-----------|
+| `config.yaml`（配置文件） | `docker compose restart` 即可 |
+| `.go` 源代码 | 必须 `docker compose build --no-cache && docker compose up -d` |
+| `docker-compose.yml` | `docker compose down && docker compose up -d` |
+
+---
+
+## 验证部署
+
+### 快速健康检查
+
+```bash
+# 1. 确认服务运行
+curl http://localhost:8317/
+
+# 2. 确认模型列表（应该有 30+ 个模型）
+curl -s http://localhost:8317/v1/models \
+  -H "Authorization: Bearer your-api-key-1" | python3 -c \
+  "import json,sys; d=json.load(sys.stdin); print(f'Total models: {len(d[\"data\"])}')"
+
+# 3. 确认 Claude 模型和别名都在
+curl -s http://localhost:8317/v1/models \
+  -H "Authorization: Bearer your-api-key-1" | python3 -c \
+  "import json,sys; [print(m['id']) for m in json.load(sys.stdin)['data'] \
+   if 'claude' in m['id'].lower() or m['id'] in ('opus','sonnet','haiku')]"
+# 预期输出应包含：opus, sonnet, haiku, claude-opus-4.6, claude-opus-4-6,
+# claude-sonnet-4.5, claude-sonnet-4-5-20250929, claude-haiku-4.5, claude-haiku-4-5-20251001
+```
+
+### 测试各模型请求
+
+```bash
+# 测试 claude-opus-4.6（带 thinking 参数）
+curl -s -X POST 'http://localhost:8317/v1/messages?beta=true' \
+  -H 'Authorization: Bearer your-api-key-1' \
+  -H 'Content-Type: application/json' \
+  -H 'Anthropic-Version: 2023-06-01' \
+  -d '{
+    "model": "claude-opus-4.6",
+    "max_tokens": 50,
+    "thinking": {"type": "enabled", "budget_tokens": 31999},
+    "messages": [{"role": "user", "content": "Say hi"}]
+  }'
+
+# 测试 opus 别名
+curl -s -X POST 'http://localhost:8317/v1/messages?beta=true' \
+  -H 'Authorization: Bearer your-api-key-1' \
+  -H 'Content-Type: application/json' \
+  -H 'Anthropic-Version: 2023-06-01' \
+  -d '{"model":"opus","max_tokens":50,"messages":[{"role":"user","content":"hi"}]}'
+
+# 测试 sonnet
+curl -s -X POST 'http://localhost:8317/v1/messages?beta=true' \
+  -H 'Authorization: Bearer your-api-key-1' \
+  -H 'Content-Type: application/json' \
+  -H 'Anthropic-Version: 2023-06-01' \
+  -d '{"model":"sonnet","max_tokens":50,"messages":[{"role":"user","content":"hi"}]}'
+
+# 测试 haiku
+curl -s -X POST 'http://localhost:8317/v1/messages?beta=true' \
+  -H 'Authorization: Bearer your-api-key-1' \
+  -H 'Content-Type: application/json' \
+  -H 'Anthropic-Version: 2023-06-01' \
+  -d '{"model":"haiku","max_tokens":50,"messages":[{"role":"user","content":"hi"}]}'
+```
+
+所有请求都应返回 `"type": "message"` 和有效的回复内容。

@@ -588,3 +588,104 @@ func TestConvertClaudeRequestToOpenAI_AssistantThinkingToolUseThinkingSplit(t *t
 		t.Fatalf("Expected reasoning_content %q, got %q", "t1\n\nt2", got)
 	}
 }
+
+// TestConvertClaudeRequestToOpenAI_OutputConfigEffort tests the conversion of
+// Claude API's output_config.effort field to OpenAI's reasoning_effort.
+// This is the new Claude Code CLI format for controlling thinking effort.
+func TestConvertClaudeRequestToOpenAI_OutputConfigEffort(t *testing.T) {
+	tests := []struct {
+		name               string
+		inputJSON          string
+		wantReasoningEffort string
+		wantHasEffort      bool
+	}{
+		{
+			name: "output_config.effort=high maps to reasoning_effort=high",
+			inputJSON: `{
+				"model": "claude-opus-4.6",
+				"output_config": {"effort": "high"},
+				"messages": [{"role": "user", "content": "hello"}]
+			}`,
+			wantReasoningEffort: "high",
+			wantHasEffort:      true,
+		},
+		{
+			name: "output_config.effort=low maps to reasoning_effort=low",
+			inputJSON: `{
+				"model": "claude-opus-4.6",
+				"output_config": {"effort": "low"},
+				"messages": [{"role": "user", "content": "hello"}]
+			}`,
+			wantReasoningEffort: "low",
+			wantHasEffort:      true,
+		},
+		{
+			name: "output_config.effort=medium maps to reasoning_effort=medium",
+			inputJSON: `{
+				"model": "claude-opus-4.6",
+				"output_config": {"effort": "medium"},
+				"messages": [{"role": "user", "content": "hello"}]
+			}`,
+			wantReasoningEffort: "medium",
+			wantHasEffort:      true,
+		},
+		{
+			name: "output_config.effort=max maps to reasoning_effort=max",
+			inputJSON: `{
+				"model": "claude-opus-4.6",
+				"output_config": {"effort": "max"},
+				"messages": [{"role": "user", "content": "hello"}]
+			}`,
+			wantReasoningEffort: "max",
+			wantHasEffort:      true,
+		},
+		{
+			name: "output_config.effort takes precedence over thinking.budget_tokens",
+			inputJSON: `{
+				"model": "claude-opus-4.6",
+				"output_config": {"effort": "high"},
+				"thinking": {"type": "enabled", "budget_tokens": 1024},
+				"messages": [{"role": "user", "content": "hello"}]
+			}`,
+			wantReasoningEffort: "high",
+			wantHasEffort:      true,
+		},
+		{
+			name: "legacy thinking.budget_tokens still works when no output_config",
+			inputJSON: `{
+				"model": "claude-opus-4.6",
+				"thinking": {"type": "enabled", "budget_tokens": 8192},
+				"messages": [{"role": "user", "content": "hello"}]
+			}`,
+			wantReasoningEffort: "medium",
+			wantHasEffort:      true,
+		},
+		{
+			name: "no thinking config results in no reasoning_effort",
+			inputJSON: `{
+				"model": "claude-opus-4.6",
+				"messages": [{"role": "user", "content": "hello"}]
+			}`,
+			wantReasoningEffort: "",
+			wantHasEffort:      false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := ConvertClaudeRequestToOpenAI("test-model", []byte(tt.inputJSON), false)
+			resultJSON := gjson.ParseBytes(result)
+
+			gotEffort := resultJSON.Get("reasoning_effort")
+			gotHasEffort := gotEffort.Exists()
+
+			if gotHasEffort != tt.wantHasEffort {
+				t.Errorf("reasoning_effort existence = %v, want %v (result: %s)", gotHasEffort, tt.wantHasEffort, string(result))
+			}
+
+			if tt.wantHasEffort && gotEffort.String() != tt.wantReasoningEffort {
+				t.Errorf("reasoning_effort = %q, want %q", gotEffort.String(), tt.wantReasoningEffort)
+			}
+		})
+	}
+}

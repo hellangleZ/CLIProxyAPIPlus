@@ -252,6 +252,7 @@ func GetGitHubCopilotModels() []*ModelInfo {
 			ContextLength:       200000,
 			MaxCompletionTokens: 64000,
 			SupportedEndpoints:  []string{"/chat/completions"},
+			Thinking:            &ThinkingSupport{Min: 1024, Max: 32000, ZeroAllowed: true, DynamicAllowed: true},
 		},
 		{
 			ID:                  "claude-opus-4.1",
@@ -288,6 +289,7 @@ func GetGitHubCopilotModels() []*ModelInfo {
 			ContextLength:       200000,
 			MaxCompletionTokens: 64000,
 			SupportedEndpoints:  []string{"/chat/completions"},
+			Thinking:            &ThinkingSupport{Min: 1024, Max: 32000, ZeroAllowed: true, DynamicAllowed: true},
 		},
 		{
 			ID:                  "claude-sonnet-4",
@@ -312,6 +314,7 @@ func GetGitHubCopilotModels() []*ModelInfo {
 			ContextLength:       200000,
 			MaxCompletionTokens: 64000,
 			SupportedEndpoints:  []string{"/chat/completions"},
+			Thinking:            &ThinkingSupport{Min: 1024, Max: 32000, ZeroAllowed: true, DynamicAllowed: true},
 		},
 		{
 			ID:                  "gemini-2.5-pro",

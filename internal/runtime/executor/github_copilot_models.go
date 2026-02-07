@@ -260,19 +260,15 @@ func findStaticCopilotModel(modelID string) *registry.ModelInfo {
 	return nil
 }
 
-// inferSupportedEndpoints determines the likely supported endpoints for a model
-// that is not in the static list, based on naming conventions:
-//   - *codex* models → /responses only
-//   - gpt-5+, o1, o3, o4 models → /chat/completions + /responses
-//   - Claude, Gemini, and others → /chat/completions only
+// inferSupportedEndpoints determines the supported endpoints for a dynamically
+// discovered model based on its brand/naming convention:
+//   - GPT / OpenAI series (gpt-*, o1-*, o3-*, o4-*) → /responses
+//   - Claude series → /chat/completions (GitHub Copilot proxies Claude via chat completions)
+//   - Everything else → /chat/completions
 func inferSupportedEndpoints(modelID string) []string {
 	lower := strings.ToLower(modelID)
-	if strings.Contains(lower, "codex") {
+	if strings.HasPrefix(lower, "gpt-") || strings.HasPrefix(lower, "o1") || strings.HasPrefix(lower, "o3") || strings.HasPrefix(lower, "o4") {
 		return []string{"/responses"}
 	}
-	if strings.HasPrefix(lower, "gpt-5") || strings.HasPrefix(lower, "o1") || strings.HasPrefix(lower, "o3") || strings.HasPrefix(lower, "o4") {
-		return []string{"/chat/completions", "/responses"}
-	}
-	// Claude, Gemini, and other providers default to chat completions only
 	return []string{"/chat/completions"}
 }

@@ -59,25 +59,51 @@ func ConvertClaudeRequestToOpenAI(modelName string, inputRawJSON []byte, stream 
 	// Stream
 	out, _ = sjson.Set(out, "stream", stream)
 
-	// Thinking: Convert Claude thinking.budget_tokens to OpenAI reasoning_effort
-	if thinkingConfig := root.Get("thinking"); thinkingConfig.Exists() && thinkingConfig.IsObject() {
-		if thinkingType := thinkingConfig.Get("type"); thinkingType.Exists() {
-			switch thinkingType.String() {
-			case "enabled":
-				if budgetTokens := thinkingConfig.Get("budget_tokens"); budgetTokens.Exists() {
-					budget := int(budgetTokens.Int())
-					if effort, ok := thinking.ConvertBudgetToLevel(budget); ok && effort != "" {
+	// Thinking: Convert Claude thinking config to OpenAI reasoning_effort.
+	// Claude Code CLI may use either:
+	//   1. Legacy format: thinking.type + thinking.budget_tokens
+	//   2. New format: output_config.effort (values: "low", "medium", "high", "max")
+	// output_config.effort takes precedence when present.
+	reasoningEffortSet := false
+
+	// Check output_config.effort first (new Claude API format, used by Claude Code CLI)
+	if outputEffort := root.Get("output_config.effort"); outputEffort.Exists() {
+		effort := strings.ToLower(strings.TrimSpace(outputEffort.String()))
+		if effort != "" {
+			effort = normalizeReasoningEffort(effort)
+			out, _ = sjson.Set(out, "reasoning_effort", effort)
+			reasoningEffortSet = true
+		}
+	}
+
+	// Fall back to legacy thinking.type + thinking.budget_tokens format
+	if !reasoningEffortSet {
+		if thinkingConfig := root.Get("thinking"); thinkingConfig.Exists() && thinkingConfig.IsObject() {
+			if thinkingType := thinkingConfig.Get("type"); thinkingType.Exists() {
+				switch thinkingType.String() {
+				case "enabled":
+					if budgetTokens := thinkingConfig.Get("budget_tokens"); budgetTokens.Exists() {
+						budget := int(budgetTokens.Int())
+						if effort, ok := thinking.ConvertBudgetToLevel(budget); ok && effort != "" {
+							// Normalize internal proxy level names to standard Claude API effort values.
+							// "xhigh" is an internal level not recognized by upstream APIs (Claude/GitHub Copilot
+							// only accept "low", "medium", "high", "max"). Map it to "high".
+							// "minimal" and "none" are also internal names; map accordingly.
+							effort = normalizeReasoningEffort(effort)
+							out, _ = sjson.Set(out, "reasoning_effort", effort)
+						}
+					} else {
+						// No budget_tokens specified, default to "auto" for enabled thinking
+						if effort, ok := thinking.ConvertBudgetToLevel(-1); ok && effort != "" {
+							effort = normalizeReasoningEffort(effort)
+							out, _ = sjson.Set(out, "reasoning_effort", effort)
+						}
+					}
+				case "disabled":
+					if effort, ok := thinking.ConvertBudgetToLevel(0); ok && effort != "" {
+						effort = normalizeReasoningEffort(effort)
 						out, _ = sjson.Set(out, "reasoning_effort", effort)
 					}
-				} else {
-					// No budget_tokens specified, default to "auto" for enabled thinking
-					if effort, ok := thinking.ConvertBudgetToLevel(-1); ok && effort != "" {
-						out, _ = sjson.Set(out, "reasoning_effort", effort)
-					}
-				}
-			case "disabled":
-				if effort, ok := thinking.ConvertBudgetToLevel(0); ok && effort != "" {
-					out, _ = sjson.Set(out, "reasoning_effort", effort)
 				}
 			}
 		}
@@ -400,4 +426,24 @@ func convertClaudeToolResultContentToString(content gjson.Result) string {
 	}
 
 	return content.Raw
+}
+
+// normalizeReasoningEffort maps internal proxy thinking level names to standard
+// upstream reasoning effort values. The upstream APIs (Claude API, GitHub Copilot)
+// only accept: "low", "medium", "high", "max".
+// Internal proxy levels like "xhigh", "minimal", "none", "auto" need to be
+// translated to valid upstream values.
+func normalizeReasoningEffort(effort string) string {
+	switch strings.ToLower(effort) {
+	case "xhigh":
+		return "high"
+	case "minimal":
+		return "low"
+	case "none":
+		return "low"
+	case "auto":
+		return "medium"
+	default:
+		return effort
+	}
 }
