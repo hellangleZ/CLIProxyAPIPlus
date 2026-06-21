@@ -81,6 +81,16 @@ func (h *OpenAIAPIHandler) OpenAIModels(c *gin.Context) {
 			filteredModel["owned_by"] = ownedBy
 		}
 
+		// Add context_length if it exists
+		if contextLength, exists := model["context_length"]; exists {
+			filteredModel["context_length"] = contextLength
+		}
+
+		// Add max_completion_tokens if it exists
+		if maxTokens, exists := model["max_completion_tokens"]; exists {
+			filteredModel["max_completion_tokens"] = maxTokens
+		}
+
 		filteredModels[i] = filteredModel
 	}
 

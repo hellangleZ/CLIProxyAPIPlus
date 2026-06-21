@@ -7,12 +7,14 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/google/uuid"
 	copilotauth "github.com/router-for-me/CLIProxyAPI/v6/internal/auth/copilot"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/thinking"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/auth"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/executor"
 	sdktranslator "github.com/router-for-me/CLIProxyAPI/v6/sdk/translator"
@@ -35,9 +37,10 @@ const (
 	// Copilot API header values — keep in sync with latest copilot-api / VS Code.
 	copilotChatVersion   = "0.26.7"
 	copilotUserAgent     = "GitHubCopilotChat/" + copilotChatVersion
-	copilotEditorVersion = "vscode/1.109.0"
+	copilotEditorVersion = "vscode/1.109.2"
 	copilotPluginVersion = "copilot-chat/" + copilotChatVersion
 	copilotIntegrationID = "vscode-chat"
+	copilotCLIIntegrationID = "copilot-developer-cli"
 	copilotOpenAIIntent  = "conversation-panel"
 	copilotAPIVersion    = "2025-04-01"
 )
@@ -124,6 +127,10 @@ func (e *GitHubCopilotExecutor) Execute(ctx context.Context, auth *cliproxyauth.
 	body = e.normalizeModel(req.Model, body)
 	requestedModel := payloadRequestedModel(opts, req.Model)
 	body = applyPayloadConfigWithRoot(e.cfg, req.Model, to.String(), "", body, originalTranslated, requestedModel)
+	body, err = thinking.ApplyThinking(body, req.Model, from.String(), to.String(), "github-copilot")
+	if err != nil {
+		log.Debugf("github-copilot executor: thinking validation: %v", err)
+	}
 	body, _ = sjson.SetBytes(body, "stream", false)
 
 	path := githubCopilotChatPath
@@ -136,6 +143,10 @@ func (e *GitHubCopilotExecutor) Execute(ctx context.Context, auth *cliproxyauth.
 		return resp, err
 	}
 	e.applyHeaders(httpReq, apiToken)
+	// isCopilotCLIModel check disabled — use vscode-chat for all models including -1m
+	// if isCopilotCLIModel(req.Model) {
+	// 	httpReq.Header.Set("Copilot-Integration-Id", copilotCLIIntegrationID)
+	// }
 
 	// Add Copilot-Vision-Request header if the request contains vision content
 	if detectVisionContent(body) {
@@ -229,6 +240,10 @@ func (e *GitHubCopilotExecutor) ExecuteStream(ctx context.Context, auth *cliprox
 	body = e.normalizeModel(req.Model, body)
 	requestedModel := payloadRequestedModel(opts, req.Model)
 	body = applyPayloadConfigWithRoot(e.cfg, req.Model, to.String(), "", body, originalTranslated, requestedModel)
+	body, err = thinking.ApplyThinking(body, req.Model, from.String(), to.String(), "github-copilot")
+	if err != nil {
+		log.Debugf("github-copilot executor: thinking validation: %v", err)
+	}
 	body, _ = sjson.SetBytes(body, "stream", true)
 	// Enable stream options for usage stats in stream
 	if !useResponses {
@@ -245,6 +260,10 @@ func (e *GitHubCopilotExecutor) ExecuteStream(ctx context.Context, auth *cliprox
 		return nil, err
 	}
 	e.applyHeaders(httpReq, apiToken)
+	// isCopilotCLIModel check disabled — use vscode-chat for all models including -1m
+	// if isCopilotCLIModel(req.Model) {
+	// 	httpReq.Header.Set("Copilot-Integration-Id", copilotCLIIntegrationID)
+	// }
 
 	// Add Copilot-Vision-Request header if the request contains vision content
 	if detectVisionContent(body) {
@@ -462,6 +481,14 @@ func detectVisionContent(body []byte) bool {
 // Model mapping should be done at the registry level if needed.
 func (e *GitHubCopilotExecutor) normalizeModel(_ string, body []byte) []byte {
 	return body
+}
+
+// isCopilotCLIModel reports whether the model requires the copilot-developer-cli
+// integration ID. CLI-exclusive models (e.g. 1M-context variants) are identified
+// by the "-1m" suffix in their base name.
+func isCopilotCLIModel(model string) bool {
+	base := strings.ToLower(thinking.ParseSuffix(model).ModelName)
+	return strings.HasSuffix(base, "-1m")
 }
 
 func useGitHubCopilotResponsesEndpoint(sourceFormat sdktranslator.Format) bool {

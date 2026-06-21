@@ -62,16 +62,34 @@ func FetchGitHubCopilotModels(ctx context.Context, auth *cliproxyauth.Auth, cfg 
 	}
 
 	httpClient := newProxyAwareHTTPClient(ctx, cfg, auth, 0)
+
+	vsModels := fetchModelsWithIntegrationID(ctx, httpClient, apiToken.Token, copilotIntegrationID)
+	cliModels := fetchModelsWithIntegrationID(ctx, httpClient, apiToken.Token, copilotCLIIntegrationID)
+
+	merged := mergeModelListsDedup(vsModels, cliModels)
+	if len(merged) == 0 {
+		return nil
+	}
+
+	log.Infof("[copilot-models] fetched %d models dynamically from Copilot API (vscode=%d, cli=%d)",
+		len(merged), len(vsModels), len(cliModels))
+	storeCopilotModelsInCache(accessToken, merged)
+	return cloneModelInfos(merged)
+}
+
+// fetchModelsWithIntegrationID fetches Copilot models using the given integration ID.
+// Tries /models then /v1/models; returns nil on failure so callers can safely merge results.
+func fetchModelsWithIntegrationID(ctx context.Context, httpClient *http.Client, apiToken, integrationID string) []*registry.ModelInfo {
 	paths := []string{"/models", "/v1/models"}
 	for _, path := range paths {
 		req, errReq := http.NewRequestWithContext(ctx, http.MethodGet, githubCopilotBaseURL+path, nil)
 		if errReq != nil {
 			return nil
 		}
-		applyCopilotModelHeaders(req, apiToken.Token)
+		applyCopilotModelHeadersWithID(req, apiToken, integrationID)
 		resp, errDo := httpClient.Do(req)
 		if errDo != nil {
-			log.Debugf("[copilot-models] request to %s failed: %v", path, errDo)
+			log.Debugf("[copilot-models][%s] request to %s failed: %v", integrationID, path, errDo)
 			if errors.Is(errDo, context.Canceled) || errors.Is(errDo, context.DeadlineExceeded) {
 				return nil
 			}
@@ -84,22 +102,55 @@ func FetchGitHubCopilotModels(ctx context.Context, auth *cliproxyauth.Auth, cfg 
 			continue
 		}
 		if !isHTTPSuccess(resp.StatusCode) {
-			log.Debugf("[copilot-models] %s returned status %d", path, resp.StatusCode)
+			log.Debugf("[copilot-models][%s] %s returned status %d", integrationID, path, resp.StatusCode)
 			continue
 		}
 
 		models := parseCopilotModels(body)
 		if len(models) > 0 {
-			log.Infof("[copilot-models] fetched %d models dynamically from Copilot API", len(models))
-			storeCopilotModelsInCache(accessToken, models)
-			return cloneModelInfos(models)
+			ids := make([]string, len(models))
+			for i, m := range models {
+				ids[i] = m.ID
+			}
+			log.Infof("[copilot-models][%s] raw model IDs from %s: %v", integrationID, path, ids)
+			return models
 		}
 	}
-
 	return nil
 }
 
+// mergeModelListsDedup merges two model lists, deduplicating by lowercased model ID.
+// base models are kept first; extra models not already in base are appended.
+func mergeModelListsDedup(base, extra []*registry.ModelInfo) []*registry.ModelInfo {
+	seen := make(map[string]struct{}, len(base))
+	result := make([]*registry.ModelInfo, 0, len(base)+len(extra))
+	for _, m := range base {
+		key := strings.ToLower(strings.TrimSpace(m.ID))
+		if key == "" {
+			continue
+		}
+		seen[key] = struct{}{}
+		result = append(result, m)
+	}
+	for _, m := range extra {
+		key := strings.ToLower(strings.TrimSpace(m.ID))
+		if key == "" {
+			continue
+		}
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		result = append(result, m)
+	}
+	return result
+}
+
 func applyCopilotModelHeaders(r *http.Request, apiToken string) {
+	applyCopilotModelHeadersWithID(r, apiToken, copilotIntegrationID)
+}
+
+func applyCopilotModelHeadersWithID(r *http.Request, apiToken, integrationID string) {
 	r.Header.Set("Authorization", "Bearer "+apiToken)
 	r.Header.Set("Accept", "application/json")
 	r.Header.Set("Content-Type", "application/json")
@@ -107,7 +158,7 @@ func applyCopilotModelHeaders(r *http.Request, apiToken string) {
 	r.Header.Set("Editor-Version", copilotEditorVersion)
 	r.Header.Set("Editor-Plugin-Version", copilotPluginVersion)
 	r.Header.Set("Openai-Intent", copilotOpenAIIntent)
-	r.Header.Set("Copilot-Integration-Id", copilotIntegrationID)
+	r.Header.Set("Copilot-Integration-Id", integrationID)
 	r.Header.Set("X-Github-Api-Version", copilotAPIVersion)
 	r.Header.Set("X-Vscode-User-Agent-Library-Version", "electron-fetch")
 }
@@ -161,6 +212,82 @@ func parseCopilotModels(body []byte) []*registry.ModelInfo {
 		models = append(models, info)
 	}
 
+	// addModelWithCaps is like addModel but accepts optional capabilities from the API response
+	addModelWithCaps := func(modelID, ownedBy string, created int64, rawItem gjson.Result) {
+		modelID = strings.TrimSpace(modelID)
+		if modelID == "" {
+			return
+		}
+		if _, ok := seen[modelID]; ok {
+			return
+		}
+		seen[modelID] = struct{}{}
+		if created == 0 {
+			created = now
+		}
+		if strings.TrimSpace(ownedBy) == "" {
+			ownedBy = "github-copilot"
+		}
+		info := &registry.ModelInfo{
+			ID:      modelID,
+			Object:  "model",
+			Created: created,
+			OwnedBy: ownedBy,
+			Type:    "github-copilot",
+		}
+
+		// Merge metadata from static model definitions (SupportedEndpoints, ContextLength, etc.)
+		if staticInfo := findStaticCopilotModel(modelID); staticInfo != nil {
+			info.SupportedEndpoints = staticInfo.SupportedEndpoints
+			info.ContextLength = staticInfo.ContextLength
+			info.MaxCompletionTokens = staticInfo.MaxCompletionTokens
+			info.DisplayName = staticInfo.DisplayName
+			info.Description = staticInfo.Description
+			info.Thinking = staticInfo.Thinking
+		} else {
+			info.SupportedEndpoints = inferSupportedEndpoints(modelID)
+			info.MaxCompletionTokens = 64000
+
+			// Try to extract context window from API response capabilities
+			contextLen := int(0)
+			// Check capabilities.limits.max_prompt_tokens (GitHub Copilot format)
+			if v := rawItem.Get("capabilities.limits.max_prompt_tokens"); v.Exists() && v.Int() > 0 {
+				contextLen = int(v.Int())
+			}
+			// Check capabilities.tokenLimits.maxInputTokens
+			if contextLen == 0 {
+				if v := rawItem.Get("capabilities.tokenLimits.maxInputTokens"); v.Exists() && v.Int() > 0 {
+					contextLen = int(v.Int())
+				}
+			}
+			// Check top-level context_length / context_window
+			if contextLen == 0 {
+				if v := rawItem.Get("context_length"); v.Exists() && v.Int() > 0 {
+					contextLen = int(v.Int())
+				}
+			}
+			if contextLen == 0 {
+				if v := rawItem.Get("context_window"); v.Exists() && v.Int() > 0 {
+					contextLen = int(v.Int())
+				}
+			}
+
+			if contextLen > 0 {
+				info.ContextLength = contextLen
+				log.Debugf("[copilot-models] model %s: context length from API = %d", modelID, contextLen)
+			} else {
+				info.ContextLength = 200000
+			}
+
+			// Try to extract max output tokens from API
+			if v := rawItem.Get("capabilities.limits.max_output_tokens"); v.Exists() && v.Int() > 0 {
+				info.MaxCompletionTokens = int(v.Int())
+			}
+		}
+
+		models = append(models, info)
+	}
+
 	data := gjson.GetBytes(body, "data")
 	switch {
 	case data.Exists() && data.IsArray():
@@ -170,7 +297,7 @@ func parseCopilotModels(body []byte) []*registry.ModelInfo {
 				if ownedBy == "" {
 					ownedBy = item.Get("vendor").String()
 				}
-				addModel(item.Get("id").String(), ownedBy, modelCreatedAt(item))
+				addModelWithCaps(item.Get("id").String(), ownedBy, modelCreatedAt(item), item)
 				continue
 			}
 			if item.Type == gjson.String {
@@ -190,7 +317,7 @@ func parseCopilotModels(body []byte) []*registry.ModelInfo {
 		if modelsNode.IsArray() {
 			for _, item := range modelsNode.Array() {
 				if item.IsObject() {
-					addModel(item.Get("id").String(), item.Get("owned_by").String(), modelCreatedAt(item))
+					addModelWithCaps(item.Get("id").String(), item.Get("owned_by").String(), modelCreatedAt(item), item)
 					continue
 				}
 				if item.Type == gjson.String {
