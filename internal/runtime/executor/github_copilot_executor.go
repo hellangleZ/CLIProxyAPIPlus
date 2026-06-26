@@ -35,14 +35,14 @@ const (
 	maxScannerBufferSize = 20_971_520
 
 	// Copilot API header values — keep in sync with latest copilot-api / VS Code.
-	copilotChatVersion   = "0.26.7"
-	copilotUserAgent     = "GitHubCopilotChat/" + copilotChatVersion
-	copilotEditorVersion = "vscode/1.109.2"
-	copilotPluginVersion = "copilot-chat/" + copilotChatVersion
-	copilotIntegrationID = "vscode-chat"
+	copilotChatVersion      = "0.26.7"
+	copilotUserAgent        = "GitHubCopilotChat/" + copilotChatVersion
+	copilotEditorVersion    = "vscode/1.109.2"
+	copilotPluginVersion    = "copilot-chat/" + copilotChatVersion
+	copilotIntegrationID    = "vscode-chat"
 	copilotCLIIntegrationID = "copilot-developer-cli"
-	copilotOpenAIIntent  = "conversation-panel"
-	copilotAPIVersion    = "2025-04-01"
+	copilotOpenAIIntent     = "conversation-panel"
+	copilotAPIVersion       = "2025-04-01"
 )
 
 // GitHubCopilotExecutor handles requests to the GitHub Copilot API.
@@ -143,10 +143,7 @@ func (e *GitHubCopilotExecutor) Execute(ctx context.Context, auth *cliproxyauth.
 		return resp, err
 	}
 	e.applyHeaders(httpReq, apiToken)
-	// isCopilotCLIModel check disabled — use vscode-chat for all models including -1m
-	// if isCopilotCLIModel(req.Model) {
-	// 	httpReq.Header.Set("Copilot-Integration-Id", copilotCLIIntegrationID)
-	// }
+	httpReq.Header.Set("Copilot-Integration-Id", copilotIntegrationIDForModel(req.Model))
 
 	// Add Copilot-Vision-Request header if the request contains vision content
 	if detectVisionContent(body) {
@@ -260,10 +257,7 @@ func (e *GitHubCopilotExecutor) ExecuteStream(ctx context.Context, auth *cliprox
 		return nil, err
 	}
 	e.applyHeaders(httpReq, apiToken)
-	// isCopilotCLIModel check disabled — use vscode-chat for all models including -1m
-	// if isCopilotCLIModel(req.Model) {
-	// 	httpReq.Header.Set("Copilot-Integration-Id", copilotCLIIntegrationID)
-	// }
+	httpReq.Header.Set("Copilot-Integration-Id", copilotIntegrationIDForModel(req.Model))
 
 	// Add Copilot-Vision-Request header if the request contains vision content
 	if detectVisionContent(body) {
@@ -489,6 +483,13 @@ func (e *GitHubCopilotExecutor) normalizeModel(_ string, body []byte) []byte {
 func isCopilotCLIModel(model string) bool {
 	base := strings.ToLower(thinking.ParseSuffix(model).ModelName)
 	return strings.HasSuffix(base, "-1m")
+}
+
+func copilotIntegrationIDForModel(model string) string {
+	if isCopilotCLIModel(model) {
+		return copilotCLIIntegrationID
+	}
+	return copilotIntegrationID
 }
 
 func useGitHubCopilotResponsesEndpoint(sourceFormat sdktranslator.Format) bool {

@@ -91,25 +91,27 @@ func TestParseCopilotModelsSupportedEndpointsFromStatic(t *testing.T) {
 
 func TestParseCopilotModelsStaticMetadataMerged(t *testing.T) {
 	// Verify that ContextLength and MaxCompletionTokens are merged from static definitions
-	body := []byte(`{"data":[{"id":"claude-opus-4.6"}]}`)
+	body := []byte(`{"data":[{"id":"claude-opus-4.8"}]}`)
 	models := parseCopilotModels(body)
 	if len(models) != 1 {
 		t.Fatalf("expected 1 model, got %d", len(models))
 	}
 	m := models[0]
-	if m.ContextLength != 200000 {
-		t.Errorf("expected ContextLength 200000 from static, got %d", m.ContextLength)
+	if m.ContextLength != 1048576 {
+		t.Errorf("expected ContextLength 1048576 from static, got %d", m.ContextLength)
 	}
 	if m.MaxCompletionTokens != 64000 {
 		t.Errorf("expected MaxCompletionTokens 64000 from static, got %d", m.MaxCompletionTokens)
 	}
-	if m.DisplayName != "Claude Opus 4.6" {
-		t.Errorf("expected DisplayName 'Claude Opus 4.6' from static, got %q", m.DisplayName)
+	if m.DisplayName != "Claude Opus 4.8" {
+		t.Errorf("expected DisplayName 'Claude Opus 4.8' from static, got %q", m.DisplayName)
 	}
-	// CRITICAL: Verify Thinking field is NOT set for GitHub Copilot Claude models
-	// (GitHub Copilot does not support output_config.effort)
-	if m.Thinking != nil {
-		t.Errorf("expected Thinking to be nil for GitHub Copilot models, got %+v", m.Thinking)
+	if m.Thinking == nil {
+		t.Fatal("expected Thinking metadata from static GitHub Copilot Claude model")
+	}
+	assertStringSlicesEqual(t, m.Thinking.Levels, []string{"low", "medium", "high", "xhigh", "max"})
+	if !m.Thinking.DynamicAllowed {
+		t.Error("expected DynamicAllowed to be true")
 	}
 }
 
@@ -170,6 +172,28 @@ func TestFindStaticCopilotModel(t *testing.T) {
 	}
 }
 
+func TestCopilotIntegrationIDForModel(t *testing.T) {
+	tests := []struct {
+		modelID     string
+		integration string
+	}{
+		{"gpt-4.1-1m", copilotCLIIntegrationID},
+		{"gpt-5.5", copilotIntegrationID},
+		{"claude-opus-4.8", copilotIntegrationID},
+		{"mai-code-1-flash", copilotIntegrationID},
+		{"mai-code-1-flash-secondary", copilotIntegrationID},
+		{"mai-code-1-flash-picker", copilotIntegrationID},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.modelID, func(t *testing.T) {
+			if got := copilotIntegrationIDForModel(tt.modelID); got != tt.integration {
+				t.Fatalf("expected integration %q, got %q", tt.integration, got)
+			}
+		})
+	}
+}
+
 func TestInferSupportedEndpoints(t *testing.T) {
 	tests := []struct {
 		modelID  string
@@ -181,6 +205,7 @@ func TestInferSupportedEndpoints(t *testing.T) {
 		{"gpt-5.5", []string{"/responses"}},
 		{"gpt-5.5-mini", []string{"/responses"}},
 		{"gpt-5.5-codex", []string{"/responses"}},
+		{"mai-code-1-flash-picker", []string{"/responses"}},
 		{"o1-preview", []string{"/responses"}},
 		{"o3-mini", []string{"/responses"}},
 		{"o4-mini", []string{"/responses"}},

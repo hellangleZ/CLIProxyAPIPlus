@@ -390,11 +390,16 @@ func findStaticCopilotModel(modelID string) *registry.ModelInfo {
 // inferSupportedEndpoints determines the supported endpoints for a dynamically
 // discovered model based on its brand/naming convention:
 //   - GPT / OpenAI series (gpt-*, o1-*, o3-*, o4-*) → /responses
+//   - MAI code models → /responses
 //   - Claude series → /chat/completions (GitHub Copilot proxies Claude via chat completions)
 //   - Everything else → /chat/completions
 func inferSupportedEndpoints(modelID string) []string {
 	lower := strings.ToLower(modelID)
-	if strings.HasPrefix(lower, "gpt-") || strings.HasPrefix(lower, "o1") || strings.HasPrefix(lower, "o3") || strings.HasPrefix(lower, "o4") {
+	if strings.HasPrefix(lower, "gpt-") ||
+		strings.HasPrefix(lower, "mai-code-") ||
+		strings.HasPrefix(lower, "o1") ||
+		strings.HasPrefix(lower, "o3") ||
+		strings.HasPrefix(lower, "o4") {
 		return []string{"/responses"}
 	}
 	return []string{"/chat/completions"}
