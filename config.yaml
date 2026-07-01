@@ -56,6 +56,8 @@ incognito-browser: true
 # When true, write application logs to rotating files instead of stdout
 logging-to-file: false
 
+request-log: true
+
 # Maximum total size (MB) of log files under the logs directory. When exceeded, the oldest log
 # files are deleted until within the limit. Set to 0 to disable.
 logs-max-total-size-mb: 0
