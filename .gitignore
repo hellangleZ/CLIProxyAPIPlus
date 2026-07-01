@@ -4,7 +4,6 @@ cliproxy
 *.exe
 
 # Configuration
-config.yaml
 .env
 
 # Generated content
@@ -55,3 +54,4 @@ _bmad-output/*
 
 # Local backups (secrets - never commit)
 backups/
+config.yaml.bak
