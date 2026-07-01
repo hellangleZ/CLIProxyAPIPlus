@@ -35,9 +35,9 @@ const (
 	maxScannerBufferSize = 20_971_520
 
 	// Copilot API header values — keep in sync with latest copilot-api / VS Code.
-	copilotChatVersion      = "0.26.7"
+	copilotChatVersion      = "0.48.1"
 	copilotUserAgent        = "GitHubCopilotChat/" + copilotChatVersion
-	copilotEditorVersion    = "vscode/1.109.2"
+	copilotEditorVersion    = "vscode/1.126.0"
 	copilotPluginVersion    = "copilot-chat/" + copilotChatVersion
 	copilotIntegrationID    = "vscode-chat"
 	copilotCLIIntegrationID = "copilot-developer-cli"

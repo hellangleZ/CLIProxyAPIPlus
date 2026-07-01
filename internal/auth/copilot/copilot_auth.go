@@ -23,7 +23,7 @@ const (
 
 	// Common HTTP header values for Copilot API requests.
 	copilotUserAgent       = "GithubCopilot/1.0"
-	copilotEditorVersion   = "vscode/1.109.2"
+	copilotEditorVersion   = "vscode/1.126.0"
 	copilotPluginVersion   = "copilot/1.300.0"
 	copilotIntegrationID   = "vscode-chat"
 	copilotOpenAIIntent    = "conversation-panel"
