@@ -428,15 +428,16 @@ func convertClaudeToolResultContentToString(content gjson.Result) string {
 	return content.Raw
 }
 
-// normalizeReasoningEffort maps internal proxy thinking level names to standard
-// upstream reasoning effort values. The upstream APIs (Claude API, GitHub Copilot)
-// only accept: "low", "medium", "high", "max".
-// Internal proxy levels like "xhigh", "minimal", "none", "auto" need to be
-// translated to valid upstream values.
+// normalizeReasoningEffort maps thinking level names that upstream never accepts
+// to safe fallbacks. It deliberately does NOT touch "xhigh" or "max": GitHub
+// Copilot's newer Claude models (claude-sonnet-5, claude-opus-4.7/4.8) accept
+// both natively, and the per-model thinking validation (thinking.ApplyThinking)
+// is responsible for clamping "xhigh" down to "high" only for models whose
+// registry Levels don't include it (e.g. claude-sonnet-4.6, claude-opus-4.6).
+// Pre-downgrading "xhigh" here would strip the level before that model-aware
+// clamp can honor it.
 func normalizeReasoningEffort(effort string) string {
 	switch strings.ToLower(effort) {
-	case "xhigh":
-		return "high"
 	case "minimal":
 		return "low"
 	case "none":
