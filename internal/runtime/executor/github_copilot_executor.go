@@ -131,6 +131,7 @@ func (e *GitHubCopilotExecutor) Execute(ctx context.Context, auth *cliproxyauth.
 	if err != nil {
 		log.Debugf("github-copilot executor: thinking validation: %v", err)
 	}
+	body = normalizeCopilotEffort(body)
 	body, _ = sjson.SetBytes(body, "stream", false)
 
 	path := githubCopilotChatPath
@@ -241,6 +242,7 @@ func (e *GitHubCopilotExecutor) ExecuteStream(ctx context.Context, auth *cliprox
 	if err != nil {
 		log.Debugf("github-copilot executor: thinking validation: %v", err)
 	}
+	body = normalizeCopilotEffort(body)
 	body, _ = sjson.SetBytes(body, "stream", true)
 	// Enable stream options for usage stats in stream
 	if !useResponses {
@@ -494,6 +496,24 @@ func copilotIntegrationIDForModel(model string) string {
 
 func useGitHubCopilotResponsesEndpoint(sourceFormat sdktranslator.Format) bool {
 	return sourceFormat.String() == "openai-response"
+}
+
+// normalizeCopilotEffort rewrites reasoning-effort values that GitHub Copilot's
+// upstream rejects into the closest value it accepts. The Codex client exposes an
+// "ultra" tier above Copilot's ceiling of "max"; without this remap the upstream
+// returns a 400 ("Invalid value: 'ultra'"). It handles both the Responses schema
+// (reasoning.effort) and the Chat Completions schema (reasoning_effort), and is a
+// no-op for any value that is not "ultra".
+func normalizeCopilotEffort(body []byte) []byte {
+	for _, path := range []string{"reasoning.effort", "reasoning_effort"} {
+		v := gjson.GetBytes(body, path)
+		if v.Exists() && strings.EqualFold(strings.TrimSpace(v.String()), "ultra") {
+			if updated, err := sjson.SetBytes(body, path, "max"); err == nil {
+				body = updated
+			}
+		}
+	}
+	return body
 }
 
 // isHTTPSuccess checks if the status code indicates success (2xx).
