@@ -211,9 +211,17 @@ func ConvertClaudeRequestToCodex(modelName string, inputRawJSON []byte, _ bool) 
 	// Add additional configuration parameters for the Codex API.
 	template, _ = sjson.Set(template, "parallel_tool_calls", true)
 
-	// Convert thinking.budget_tokens to reasoning.effort.
+	// Convert Claude thinking configuration to Codex reasoning.effort.
+	// Priority mirrors thinking.extractClaudeConfig:
+	//   1. output_config.effort (newer Claude API / Claude Code effort format)
+	//   2. thinking.type + thinking.budget_tokens (legacy format)
+	// When neither is present, default to "medium".
 	reasoningEffort := "medium"
-	if thinkingConfig := rootResult.Get("thinking"); thinkingConfig.Exists() && thinkingConfig.IsObject() {
+	if effort := rootResult.Get("output_config.effort"); effort.Exists() {
+		if value := strings.ToLower(strings.TrimSpace(effort.String())); value != "" {
+			reasoningEffort = value
+		}
+	} else if thinkingConfig := rootResult.Get("thinking"); thinkingConfig.Exists() && thinkingConfig.IsObject() {
 		switch thinkingConfig.Get("type").String() {
 		case "enabled":
 			if budgetTokens := thinkingConfig.Get("budget_tokens"); budgetTokens.Exists() {

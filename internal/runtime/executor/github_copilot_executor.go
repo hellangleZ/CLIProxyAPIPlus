@@ -113,9 +113,12 @@ func (e *GitHubCopilotExecutor) Execute(ctx context.Context, auth *cliproxyauth.
 	defer reporter.trackFailure(ctx, &err)
 
 	from := opts.SourceFormat
-	useResponses := useGitHubCopilotResponsesEndpoint(from)
+	bridgeModel, bridgeActive := claudeResponsesBridgeModel(req.Model, from)
+	useResponses := useGitHubCopilotResponsesEndpoint(from) || bridgeActive
 	to := sdktranslator.FromString("openai")
-	if useResponses {
+	if bridgeActive {
+		to = sdktranslator.FromString("codex")
+	} else if useResponses {
 		to = sdktranslator.FromString("openai-response")
 	}
 	originalPayload := bytes.Clone(req.Payload)
@@ -132,6 +135,9 @@ func (e *GitHubCopilotExecutor) Execute(ctx context.Context, auth *cliproxyauth.
 		log.Debugf("github-copilot executor: thinking validation: %v", err)
 	}
 	body = normalizeCopilotEffort(body)
+	if bridgeActive {
+		body = rewriteBridgeModel(body, bridgeModel)
+	}
 	body, _ = sjson.SetBytes(body, "stream", false)
 
 	path := githubCopilotChatPath
@@ -206,6 +212,10 @@ func (e *GitHubCopilotExecutor) Execute(ctx context.Context, auth *cliproxyauth.
 		reporter.publish(ctx, detail)
 	}
 
+	if bridgeActive {
+		data = wrapResponsesForCodexBridge(data)
+	}
+
 	var param any
 	converted := sdktranslator.TranslateNonStream(ctx, to, from, req.Model, bytes.Clone(opts.OriginalRequest), body, data, &param)
 	resp = cliproxyexecutor.Response{Payload: []byte(converted)}
@@ -224,9 +234,12 @@ func (e *GitHubCopilotExecutor) ExecuteStream(ctx context.Context, auth *cliprox
 	defer reporter.trackFailure(ctx, &err)
 
 	from := opts.SourceFormat
-	useResponses := useGitHubCopilotResponsesEndpoint(from)
+	bridgeModel, bridgeActive := claudeResponsesBridgeModel(req.Model, from)
+	useResponses := useGitHubCopilotResponsesEndpoint(from) || bridgeActive
 	to := sdktranslator.FromString("openai")
-	if useResponses {
+	if bridgeActive {
+		to = sdktranslator.FromString("codex")
+	} else if useResponses {
 		to = sdktranslator.FromString("openai-response")
 	}
 	originalPayload := bytes.Clone(req.Payload)
@@ -243,6 +256,9 @@ func (e *GitHubCopilotExecutor) ExecuteStream(ctx context.Context, auth *cliprox
 		log.Debugf("github-copilot executor: thinking validation: %v", err)
 	}
 	body = normalizeCopilotEffort(body)
+	if bridgeActive {
+		body = rewriteBridgeModel(body, bridgeModel)
+	}
 	body, _ = sjson.SetBytes(body, "stream", true)
 	// Enable stream options for usage stats in stream
 	if !useResponses {
@@ -496,6 +512,63 @@ func copilotIntegrationIDForModel(model string) string {
 
 func useGitHubCopilotResponsesEndpoint(sourceFormat sdktranslator.Format) bool {
 	return sourceFormat.String() == "openai-response"
+}
+
+// claudeBridgeSuffix marks Claude-client aliases for Responses-only Copilot models.
+// A request for "gpt-5.6-sol-cc" from a Claude client is bridged to the real
+// upstream model "gpt-5.6-sol" over the /responses endpoint.
+const claudeBridgeSuffix = "-cc"
+
+// claudeResponsesBridgeModel reports whether the request is a Claude-client call
+// for one of the "-cc" bridge aliases. When it is, the returned string is the real
+// upstream model name (suffix stripped) and the boolean is true. The bridge only
+// activates for the Claude source format; every other client (including native
+// Responses clients hitting the un-suffixed model) is left untouched.
+func claudeResponsesBridgeModel(model string, sourceFormat sdktranslator.Format) (string, bool) {
+	if sourceFormat.String() != "claude" {
+		return model, false
+	}
+	base := thinking.ParseSuffix(model).ModelName
+	if !strings.HasSuffix(strings.ToLower(base), claudeBridgeSuffix) {
+		return model, false
+	}
+	upstream := base[:len(base)-len(claudeBridgeSuffix)]
+	if upstream == "" {
+		return model, false
+	}
+	return upstream, true
+}
+
+// rewriteBridgeModel replaces the translated body's "model" field with the real
+// upstream model name. The Claude->Codex translator writes the client-facing alias
+// (e.g. "gpt-5.6-sol-cc") into the payload; Copilot only recognises the real name.
+func rewriteBridgeModel(body []byte, upstreamModel string) []byte {
+	if upstreamModel == "" {
+		return body
+	}
+	if updated, err := sjson.SetBytes(body, "model", upstreamModel); err == nil {
+		return updated
+	}
+	return body
+}
+
+// wrapResponsesForCodexBridge adapts a non-streaming Copilot /responses body into
+// the envelope the Codex->Claude translator expects. Copilot returns a bare
+// response object ({"object":"response","status":"completed",...}), whereas
+// ConvertCodexResponseToClaudeNonStream reads {"type":"response.completed",
+// "response":{...}}. If the body is already wrapped it is returned unchanged.
+func wrapResponsesForCodexBridge(data []byte) []byte {
+	if gjson.GetBytes(data, "type").String() == "response.completed" {
+		return data
+	}
+	if !gjson.ValidBytes(data) {
+		return data
+	}
+	wrapped, err := sjson.SetRawBytes([]byte(`{"type":"response.completed"}`), "response", data)
+	if err != nil {
+		return data
+	}
+	return wrapped
 }
 
 // normalizeCopilotEffort rewrites reasoning-effort values that GitHub Copilot's

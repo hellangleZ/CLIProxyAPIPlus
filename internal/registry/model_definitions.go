@@ -422,6 +422,53 @@ func GetGitHubCopilotModels() []*ModelInfo {
 			MaxCompletionTokens: 16384,
 			SupportedEndpoints:  []string{"/chat/completions", "/responses"},
 		},
+
+		// --- Claude-bridge aliases for Responses-only GPT models ---
+		// The upstream gpt-5.6-* models are Responses-API-only, so Claude clients
+		// (Claude Code via /v1/messages) cannot reach them directly. Each "-cc"
+		// alias is recognised by the GitHub Copilot executor, which strips the
+		// suffix, forces the /responses endpoint, and bridges the request/response
+		// through the Claude<->Codex (Responses) translators. The original
+		// gpt-5.6-* models are untouched and keep serving native Responses clients.
+		{
+			ID:                  "gpt-5.6-sol-cc",
+			Object:              "model",
+			Created:             now,
+			OwnedBy:             "github-copilot",
+			Type:                "github-copilot",
+			DisplayName:         "GPT-5.6 Sol (Claude-compatible)",
+			Description:         "OpenAI GPT-5.6 Sol via GitHub Copilot, bridged to the Claude Messages API",
+			ContextLength:       922000,
+			MaxCompletionTokens: 128000,
+			SupportedEndpoints:  []string{"/chat/completions"},
+			Thinking:            &ThinkingSupport{Levels: []string{"low", "medium", "high", "xhigh", "max"}, ZeroAllowed: true, DynamicAllowed: true},
+		},
+		{
+			ID:                  "gpt-5.6-luna-cc",
+			Object:              "model",
+			Created:             now,
+			OwnedBy:             "github-copilot",
+			Type:                "github-copilot",
+			DisplayName:         "GPT-5.6 Luna (Claude-compatible)",
+			Description:         "OpenAI GPT-5.6 Luna via GitHub Copilot, bridged to the Claude Messages API",
+			ContextLength:       922000,
+			MaxCompletionTokens: 128000,
+			SupportedEndpoints:  []string{"/chat/completions"},
+			Thinking:            &ThinkingSupport{Levels: []string{"low", "medium", "high", "xhigh", "max"}, ZeroAllowed: true, DynamicAllowed: true},
+		},
+		{
+			ID:                  "gpt-5.6-terra-cc",
+			Object:              "model",
+			Created:             now,
+			OwnedBy:             "github-copilot",
+			Type:                "github-copilot",
+			DisplayName:         "GPT-5.6 Terra (Claude-compatible)",
+			Description:         "OpenAI GPT-5.6 Terra via GitHub Copilot, bridged to the Claude Messages API",
+			ContextLength:       922000,
+			MaxCompletionTokens: 128000,
+			SupportedEndpoints:  []string{"/chat/completions"},
+			Thinking:            &ThinkingSupport{Levels: []string{"low", "medium", "high", "xhigh", "max"}, ZeroAllowed: true, DynamicAllowed: true},
+		},
 	}
 }
 
