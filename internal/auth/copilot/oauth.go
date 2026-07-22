@@ -129,6 +129,11 @@ func (c *DeviceFlowClient) PollForToken(ctx context.Context, deviceCode *DeviceC
 						interval += 5 * time.Second
 						ticker.Reset(interval)
 						continue
+					case ErrTransientServerError.Type:
+						// GitHub had a one-off hiccup (e.g. 502/503). Keep polling
+						// instead of aborting the whole login attempt.
+						log.Warnf("copilot: transient error exchanging device code, retrying: %v", err)
+						continue
 					case ErrDeviceCodeExpired.Type:
 						return nil, err
 					case ErrAccessDenied.Type:
@@ -158,7 +163,8 @@ func (c *DeviceFlowClient) exchangeDeviceCode(ctx context.Context, deviceCode st
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, NewAuthenticationError(ErrTokenExchangeFailed, err)
+		// Network-level failures (timeouts, connection resets) are usually transient.
+		return nil, NewAuthenticationError(ErrTransientServerError, err)
 	}
 	defer func() {
 		if errClose := resp.Body.Close(); errClose != nil {
@@ -168,7 +174,14 @@ func (c *DeviceFlowClient) exchangeDeviceCode(ctx context.Context, deviceCode st
 
 	bodyBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, NewAuthenticationError(ErrTokenExchangeFailed, err)
+		return nil, NewAuthenticationError(ErrTransientServerError, err)
+	}
+
+	// GitHub occasionally returns a generic 5xx error page instead of the expected
+	// JSON payload during device-flow polling. Treat that as transient rather than
+	// failing the whole login attempt.
+	if isRetryableStatus(resp.StatusCode) {
+		return nil, NewAuthenticationError(ErrTransientServerError, fmt.Errorf("status %d: %s", resp.StatusCode, string(bodyBytes)))
 	}
 
 	// GitHub returns 200 for both success and error cases in device flow
@@ -182,7 +195,7 @@ func (c *DeviceFlowClient) exchangeDeviceCode(ctx context.Context, deviceCode st
 	}
 
 	if err = json.Unmarshal(bodyBytes, &oauthResp); err != nil {
-		return nil, NewAuthenticationError(ErrTokenExchangeFailed, err)
+		return nil, NewAuthenticationError(ErrTokenExchangeFailed, fmt.Errorf("status %d: unexpected response: %w", resp.StatusCode, err))
 	}
 
 	if oauthResp.Error != "" {

@@ -104,6 +104,15 @@ var (
 		Code:    http.StatusBadRequest,
 	}
 
+	// ErrTransientServerError represents a temporary upstream failure (e.g. GitHub
+	// returning a 502/503/504 error page) that is safe to retry rather than treat
+	// as a fatal authentication failure.
+	ErrTransientServerError = &AuthenticationError{
+		Type:    "transient_server_error",
+		Message: "GitHub returned a temporary error",
+		Code:    http.StatusBadGateway,
+	}
+
 	// ErrPollingTimeout represents an error when polling times out.
 	ErrPollingTimeout = &AuthenticationError{
 		Type:    "polling_timeout",
@@ -160,6 +169,8 @@ func GetUserFriendlyMessage(err error) string {
 			return "Authentication was cancelled or denied."
 		case "token_exchange_failed":
 			return "Failed to complete authentication. Please try again."
+		case "transient_server_error":
+			return "GitHub had a temporary issue. Please try again."
 		case "polling_timeout":
 			return "Authentication timed out. Please try again."
 		case "user_info_failed":

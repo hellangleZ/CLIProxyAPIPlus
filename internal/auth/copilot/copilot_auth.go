@@ -96,14 +96,47 @@ func (c *CopilotAuth) WaitForAuthorization(ctx context.Context, deviceCode *Devi
 
 // GetCopilotAPIToken exchanges a GitHub access token for a Copilot API token.
 // This token is used to make authenticated requests to the Copilot API.
+// Transient upstream failures (network errors or 5xx responses) are retried a
+// few times with a short backoff before giving up, since GitHub occasionally
+// returns a one-off error page for this endpoint.
 func (c *CopilotAuth) GetCopilotAPIToken(ctx context.Context, githubAccessToken string) (*CopilotAPIToken, error) {
 	if githubAccessToken == "" {
 		return nil, NewAuthenticationError(ErrTokenExchangeFailed, fmt.Errorf("github access token is empty"))
 	}
 
+	const maxAttempts = 3
+	var lastErr error
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		if attempt > 0 {
+			delay := time.Duration(attempt) * time.Second
+			log.Warnf("copilot: retrying Copilot API token request (attempt %d/%d) after error: %v", attempt+1, maxAttempts, lastErr)
+			select {
+			case <-ctx.Done():
+				return nil, NewAuthenticationError(ErrTokenExchangeFailed, ctx.Err())
+			case <-time.After(delay):
+			}
+		}
+
+		apiToken, retryable, err := c.requestCopilotAPIToken(ctx, githubAccessToken)
+		if err == nil {
+			return apiToken, nil
+		}
+		lastErr = err
+		if !retryable {
+			return nil, err
+		}
+	}
+
+	return nil, lastErr
+}
+
+// requestCopilotAPIToken performs a single attempt to exchange the GitHub token for
+// a Copilot API token. The bool return value reports whether the failure looks
+// transient (network error or retryable HTTP status) and is safe to retry.
+func (c *CopilotAuth) requestCopilotAPIToken(ctx context.Context, githubAccessToken string) (*CopilotAPIToken, bool, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, copilotAPITokenURL, nil)
 	if err != nil {
-		return nil, NewAuthenticationError(ErrTokenExchangeFailed, err)
+		return nil, false, NewAuthenticationError(ErrTokenExchangeFailed, err)
 	}
 
 	req.Header.Set("Authorization", "token "+githubAccessToken)
@@ -114,7 +147,7 @@ func (c *CopilotAuth) GetCopilotAPIToken(ctx context.Context, githubAccessToken 
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, NewAuthenticationError(ErrTokenExchangeFailed, err)
+		return nil, true, NewAuthenticationError(ErrTokenExchangeFailed, err)
 	}
 	defer func() {
 		if errClose := resp.Body.Close(); errClose != nil {
@@ -124,24 +157,24 @@ func (c *CopilotAuth) GetCopilotAPIToken(ctx context.Context, githubAccessToken 
 
 	bodyBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, NewAuthenticationError(ErrTokenExchangeFailed, err)
+		return nil, true, NewAuthenticationError(ErrTokenExchangeFailed, err)
 	}
 
 	if !isHTTPSuccess(resp.StatusCode) {
-		return nil, NewAuthenticationError(ErrTokenExchangeFailed,
+		return nil, isRetryableStatus(resp.StatusCode), NewAuthenticationError(ErrTokenExchangeFailed,
 			fmt.Errorf("status %d: %s", resp.StatusCode, string(bodyBytes)))
 	}
 
 	var apiToken CopilotAPIToken
 	if err = json.Unmarshal(bodyBytes, &apiToken); err != nil {
-		return nil, NewAuthenticationError(ErrTokenExchangeFailed, err)
+		return nil, false, NewAuthenticationError(ErrTokenExchangeFailed, err)
 	}
 
 	if apiToken.Token == "" {
-		return nil, NewAuthenticationError(ErrTokenExchangeFailed, fmt.Errorf("empty copilot api token"))
+		return nil, false, NewAuthenticationError(ErrTokenExchangeFailed, fmt.Errorf("empty copilot api token"))
 	}
 
-	return &apiToken, nil
+	return &apiToken, false, nil
 }
 
 // ValidateToken checks if a GitHub access token is valid by attempting to fetch user info.
@@ -222,4 +255,16 @@ func buildChatCompletionURL() string {
 // isHTTPSuccess checks if the status code indicates success (2xx).
 func isHTTPSuccess(statusCode int) bool {
 	return statusCode >= 200 && statusCode < 300
+}
+
+// isRetryableStatus reports whether an HTTP status code indicates a transient
+// upstream failure that is safe to retry. Mirrors the status codes the proxy's
+// own request-retry setting treats as retryable.
+func isRetryableStatus(statusCode int) bool {
+	switch statusCode {
+	case http.StatusRequestTimeout, http.StatusInternalServerError, http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+		return true
+	default:
+		return false
+	}
 }
