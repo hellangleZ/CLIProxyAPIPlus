@@ -423,13 +423,13 @@ func GetGitHubCopilotModels() []*ModelInfo {
 			SupportedEndpoints:  []string{"/chat/completions", "/responses"},
 		},
 
-		// --- Claude-bridge aliases for Responses-only GPT models ---
-		// The upstream gpt-5.6-* models are Responses-API-only, so Claude clients
+		// --- Claude-bridge aliases for Responses-only Copilot models ---
+		// These upstream models are Responses-API-only, so Claude clients
 		// (Claude Code via /v1/messages) cannot reach them directly. Each "-cc"
 		// alias is recognised by the GitHub Copilot executor, which strips the
 		// suffix, forces the /responses endpoint, and bridges the request/response
-		// through the Claude<->Codex (Responses) translators. The original
-		// gpt-5.6-* models are untouched and keep serving native Responses clients.
+		// through the Claude<->Codex (Responses) translators. The original models
+		// are untouched and keep serving native Responses clients.
 		{
 			ID:                  "gpt-5.6-sol-cc",
 			Object:              "model",
@@ -468,6 +468,45 @@ func GetGitHubCopilotModels() []*ModelInfo {
 			MaxCompletionTokens: 128000,
 			SupportedEndpoints:  []string{"/chat/completions"},
 			Thinking:            &ThinkingSupport{Levels: []string{"low", "medium", "high", "xhigh", "max"}, ZeroAllowed: true, DynamicAllowed: true},
+		},
+		{
+			ID:                  "gpt-5.5-cc",
+			Object:              "model",
+			Created:             now,
+			OwnedBy:             "github-copilot",
+			Type:                "github-copilot",
+			DisplayName:         "GPT-5.5 (Claude-compatible)",
+			Description:         "OpenAI GPT-5.5 via GitHub Copilot, bridged to the Claude Messages API",
+			ContextLength:       922000,
+			MaxCompletionTokens: 128000,
+			SupportedEndpoints:  []string{"/chat/completions"},
+			Thinking:            &ThinkingSupport{Levels: []string{"none", "low", "medium", "high", "xhigh", "max"}, ZeroAllowed: true, DynamicAllowed: true},
+		},
+		{
+			ID:                  "grok-4.5-cc",
+			Object:              "model",
+			Created:             now,
+			OwnedBy:             "github-copilot",
+			Type:                "github-copilot",
+			DisplayName:         "Grok 4.5 (Claude-compatible)",
+			Description:         "xAI Grok 4.5 via GitHub Copilot, bridged to the Claude Messages API",
+			ContextLength:       500000,
+			MaxCompletionTokens: 128000,
+			SupportedEndpoints:  []string{"/chat/completions"},
+			Thinking:            &ThinkingSupport{Levels: []string{"none", "low", "medium", "high", "xhigh", "max"}, ZeroAllowed: true, DynamicAllowed: true},
+		},
+		{
+			ID:                  "grok-4.6-cc",
+			Object:              "model",
+			Created:             now,
+			OwnedBy:             "github-copilot",
+			Type:                "github-copilot",
+			DisplayName:         "Grok 4.6 (Claude-compatible)",
+			Description:         "xAI Grok 4.6 via GitHub Copilot, bridged to the Claude Messages API",
+			ContextLength:       500000,
+			MaxCompletionTokens: 128000,
+			SupportedEndpoints:  []string{"/chat/completions"},
+			Thinking:            &ThinkingSupport{Levels: []string{"none", "low", "medium", "high", "xhigh", "max"}, ZeroAllowed: true, DynamicAllowed: true},
 		},
 	}
 }

@@ -26,3 +26,27 @@ services:
       - ${CLI_PROXY_AUTH_PATH:-./auths}:/root/.cli-proxy-api
       - ${CLI_PROXY_LOG_PATH:-./logs}:/CLIProxyAPI/logs
     restart: unless-stopped
+
+  # Opt-in second instance for a separate VS Code / GitHub Copilot account.
+  # GitHub Copilot uses device flow, so this instance only needs the API port.
+  cli-proxy-api-vscode-2:
+    profiles: ["dual"]
+    image: ${CLI_PROXY_IMAGE:-eceasy/cli-proxy-api-plus:latest}
+    pull_policy: build
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        VERSION: ${VERSION:-dev}
+        COMMIT: ${COMMIT:-none}
+        BUILD_DATE: ${BUILD_DATE:-unknown}
+    container_name: ${CLI_PROXY_VSCODE2_CONTAINER_NAME:-cli-proxy-api-plus-vscode-2}
+    environment:
+      DEPLOY: ${DEPLOY:-}
+    ports:
+      - "${CLI_PROXY_VSCODE2_PORT:-8318}:8317"
+    volumes:
+      - ${CLI_PROXY_VSCODE2_CONFIG_PATH:-./config.yaml}:/CLIProxyAPI/config.yaml
+      - ${CLI_PROXY_VSCODE2_AUTH_PATH:-./auths-vscode-2}:/root/.cli-proxy-api
+      - ${CLI_PROXY_VSCODE2_LOG_PATH:-./logs-vscode-2}:/CLIProxyAPI/logs
+    restart: unless-stopped

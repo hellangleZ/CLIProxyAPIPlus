@@ -134,11 +134,14 @@ func (e *GitHubCopilotExecutor) Execute(ctx context.Context, auth *cliproxyauth.
 	if err != nil {
 		log.Debugf("github-copilot executor: thinking validation: %v", err)
 	}
-	body = normalizeCopilotEffort(body)
+	body = normalizeCopilotEffort(body, req.Model)
 	if bridgeActive {
 		body = rewriteBridgeModel(body, bridgeModel)
 	}
 	body, _ = sjson.SetBytes(body, "stream", false)
+	if useResponses {
+		body = repairResponsesInputCallIDs(body)
+	}
 
 	path := githubCopilotChatPath
 	if useResponses {
@@ -193,7 +196,7 @@ func (e *GitHubCopilotExecutor) Execute(ctx context.Context, auth *cliproxyauth.
 		data, _ := io.ReadAll(httpResp.Body)
 		appendAPIResponseChunk(ctx, e.cfg, data)
 		log.Debugf("github-copilot executor: upstream error status: %d, body: %s", httpResp.StatusCode, summarizeErrorBody(httpResp.Header.Get("Content-Type"), data))
-		err = statusErr{code: httpResp.StatusCode, msg: string(data)}
+		err = newGitHubCopilotStatusErr(httpResp.StatusCode, data, req.Model)
 		return resp, err
 	}
 
@@ -217,7 +220,7 @@ func (e *GitHubCopilotExecutor) Execute(ctx context.Context, auth *cliproxyauth.
 	}
 
 	var param any
-	converted := sdktranslator.TranslateNonStream(ctx, to, from, req.Model, bytes.Clone(opts.OriginalRequest), body, data, &param)
+	converted := sdktranslator.TranslateNonStream(ctx, to, from, req.Model, originalPayload, body, data, &param)
 	resp = cliproxyexecutor.Response{Payload: []byte(converted)}
 	reporter.ensurePublished(ctx)
 	return resp, nil
@@ -255,11 +258,14 @@ func (e *GitHubCopilotExecutor) ExecuteStream(ctx context.Context, auth *cliprox
 	if err != nil {
 		log.Debugf("github-copilot executor: thinking validation: %v", err)
 	}
-	body = normalizeCopilotEffort(body)
+	body = normalizeCopilotEffort(body, req.Model)
 	if bridgeActive {
 		body = rewriteBridgeModel(body, bridgeModel)
 	}
 	body, _ = sjson.SetBytes(body, "stream", true)
+	if useResponses {
+		body = repairResponsesInputCallIDs(body)
+	}
 	// Enable stream options for usage stats in stream
 	if !useResponses {
 		body, _ = sjson.SetBytes(body, "stream_options.include_usage", true)
@@ -320,7 +326,7 @@ func (e *GitHubCopilotExecutor) ExecuteStream(ctx context.Context, auth *cliprox
 		}
 		appendAPIResponseChunk(ctx, e.cfg, data)
 		log.Debugf("github-copilot executor: upstream error status: %d, body: %s", httpResp.StatusCode, summarizeErrorBody(httpResp.Header.Get("Content-Type"), data))
-		err = statusErr{code: httpResp.StatusCode, msg: string(data)}
+		err = newGitHubCopilotStatusErr(httpResp.StatusCode, data, req.Model)
 		return nil, err
 	}
 
@@ -358,7 +364,7 @@ func (e *GitHubCopilotExecutor) ExecuteStream(ctx context.Context, auth *cliprox
 				}
 			}
 
-			chunks := sdktranslator.TranslateStream(ctx, to, from, req.Model, bytes.Clone(opts.OriginalRequest), body, bytes.Clone(line), &param)
+			chunks := sdktranslator.TranslateStream(ctx, to, from, req.Model, originalPayload, body, bytes.Clone(line), &param)
 			for i := range chunks {
 				out <- cliproxyexecutor.StreamChunk{Payload: []byte(chunks[i])}
 			}
@@ -376,9 +382,36 @@ func (e *GitHubCopilotExecutor) ExecuteStream(ctx context.Context, auth *cliprox
 	return stream, nil
 }
 
-// CountTokens is not supported for GitHub Copilot.
-func (e *GitHubCopilotExecutor) CountTokens(_ context.Context, _ *cliproxyauth.Auth, _ cliproxyexecutor.Request, _ cliproxyexecutor.Options) (cliproxyexecutor.Response, error) {
-	return cliproxyexecutor.Response{}, statusErr{code: http.StatusNotImplemented, msg: "count tokens not supported for github-copilot"}
+// CountTokens estimates input tokens locally because GitHub Copilot does not
+// expose a token-counting endpoint.
+func (e *GitHubCopilotExecutor) CountTokens(_ context.Context, _ *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (cliproxyexecutor.Response, error) {
+	payload := req.Payload
+	if len(opts.OriginalRequest) > 0 {
+		payload = opts.OriginalRequest
+	}
+
+	if !gjson.ValidBytes(payload) {
+		return cliproxyexecutor.Response{}, fmt.Errorf("github-copilot executor: invalid JSON request for token counting")
+	}
+
+	encoder, err := getTokenizer(copilotBaseModelName(req.Model))
+	if err != nil {
+		return cliproxyexecutor.Response{}, fmt.Errorf("github-copilot executor: token counting tokenizer failed: %w", err)
+	}
+
+	var count int64
+	if opts.SourceFormat.String() == "claude" {
+		count, err = countClaudeChatTokens(encoder, payload)
+	} else {
+		count, err = countOpenAIChatTokens(encoder, payload)
+	}
+	if err != nil {
+		return cliproxyexecutor.Response{}, fmt.Errorf("github-copilot executor: token counting failed: %w", err)
+	}
+	if opts.SourceFormat.String() == "claude" {
+		return cliproxyexecutor.Response{Payload: []byte(fmt.Sprintf(`{"input_tokens":%d}`, count))}, nil
+	}
+	return cliproxyexecutor.Response{Payload: buildOpenAIUsageJSON(count)}, nil
 }
 
 // Refresh validates the GitHub token is still working.
@@ -495,11 +528,72 @@ func (e *GitHubCopilotExecutor) normalizeModel(_ string, body []byte) []byte {
 	return body
 }
 
+func copilotBaseModelName(model string) string {
+	base := thinking.ParseSuffix(model).ModelName
+	if !strings.HasSuffix(base, "]") {
+		return base
+	}
+	open := strings.LastIndex(base, "[")
+	if open <= 0 {
+		return base
+	}
+	tag := strings.ToLower(strings.TrimSpace(base[open+1 : len(base)-1]))
+	if tag == "1m" {
+		return base[:open]
+	}
+	return base
+}
+
+func isGrokClaudeBridgeModel(model string) bool {
+	base := strings.ToLower(strings.TrimSpace(copilotBaseModelName(model)))
+	return base == "grok-4.5-cc" || base == "grok-4.6-cc"
+}
+
+// newGitHubCopilotStatusErr preserves upstream errors except for the exact
+// nested prompt-limit response returned by Grok bridge models. Claude Code
+// recognizes the normalized message and can start its reactive compact flow.
+func newGitHubCopilotStatusErr(statusCode int, body []byte, model string) statusErr {
+	err := statusErr{code: statusCode, msg: string(body)}
+	if statusCode != http.StatusBadRequest || !isGrokClaudeBridgeModel(model) || !gjson.ValidBytes(body) {
+		return err
+	}
+
+	outerCode := gjson.GetBytes(body, "error.code")
+	outerMessage := gjson.GetBytes(body, "error.message")
+	if outerCode.Type != gjson.String || outerCode.String() != "invalid_request_body" || outerMessage.Type != gjson.String {
+		return err
+	}
+
+	nestedBody := []byte(outerMessage.String())
+	if !gjson.ValidBytes(nestedBody) {
+		return err
+	}
+	innerCode := gjson.GetBytes(nestedBody, "code")
+	innerMessage := gjson.GetBytes(nestedBody, "error")
+	if innerCode.Type != gjson.String || innerCode.String() != "invalid-argument" || innerMessage.Type != gjson.String {
+		return err
+	}
+
+	message := innerMessage.String()
+	var limit, actual int64
+	matched, scanErr := fmt.Sscanf(message, "This model's maximum prompt length is %d but the request contains %d tokens.", &limit, &actual)
+	if scanErr != nil || matched != 2 || actual <= limit {
+		return err
+	}
+	expected := fmt.Sprintf("This model's maximum prompt length is %d but the request contains %d tokens.", limit, actual)
+	if message != expected {
+		return err
+	}
+
+	err.msg = fmt.Sprintf("prompt is too long: %d tokens > %d", actual, limit)
+	return err
+}
+
 // isCopilotCLIModel reports whether the model requires the copilot-developer-cli
 // integration ID. CLI-exclusive models (e.g. 1M-context variants) are identified
 // by the "-1m" suffix in their base name.
 func isCopilotCLIModel(model string) bool {
-	base := strings.ToLower(thinking.ParseSuffix(model).ModelName)
+	base := strings.ToLower(copilotBaseModelName(model))
 	return strings.HasSuffix(base, "-1m")
 }
 
@@ -528,7 +622,7 @@ func claudeResponsesBridgeModel(model string, sourceFormat sdktranslator.Format)
 	if sourceFormat.String() != "claude" {
 		return model, false
 	}
-	base := thinking.ParseSuffix(model).ModelName
+	base := copilotBaseModelName(model)
 	if !strings.HasSuffix(strings.ToLower(base), claudeBridgeSuffix) {
 		return model, false
 	}
@@ -548,6 +642,63 @@ func rewriteBridgeModel(body []byte, upstreamModel string) []byte {
 	}
 	if updated, err := sjson.SetBytes(body, "model", upstreamModel); err == nil {
 		return updated
+	}
+	return body
+}
+
+func repairResponsesInputCallIDs(body []byte) []byte {
+	input := gjson.GetBytes(body, "input")
+	if !input.IsArray() {
+		return body
+	}
+
+	pendingCallIDs := []string{}
+	popPending := func(explicit string) string {
+		explicit = strings.TrimSpace(explicit)
+		if explicit != "" {
+			for i, pending := range pendingCallIDs {
+				if pending == explicit {
+					pendingCallIDs = append(pendingCallIDs[:i], pendingCallIDs[i+1:]...)
+					break
+				}
+			}
+			return explicit
+		}
+		if len(pendingCallIDs) == 0 {
+			return ""
+		}
+		callID := pendingCallIDs[0]
+		pendingCallIDs = pendingCallIDs[1:]
+		return callID
+	}
+
+	for i, item := range input.Array() {
+		switch item.Get("type").String() {
+		case "function_call":
+			callID := strings.TrimSpace(item.Get("call_id").String())
+			if callID == "" {
+				callID = strings.TrimSpace(item.Get("id").String())
+			}
+			if callID == "" {
+				callID = fmt.Sprintf("call_%d", i)
+			}
+			if strings.TrimSpace(item.Get("call_id").String()) == "" {
+				if updated, err := sjson.SetBytes(body, fmt.Sprintf("input.%d.call_id", i), callID); err == nil {
+					body = updated
+				}
+			}
+			pendingCallIDs = append(pendingCallIDs, callID)
+		case "function_call_output":
+			callID := popPending(item.Get("call_id").String())
+			if callID == "" {
+				callID = fmt.Sprintf("call_output_%d", i)
+			}
+			if strings.TrimSpace(item.Get("call_id").String()) == "" {
+				if updated, err := sjson.SetBytes(body, fmt.Sprintf("input.%d.call_id", i), callID); err == nil {
+					body = updated
+				}
+			}
+		}
 	}
 	return body
 }
@@ -572,18 +723,43 @@ func wrapResponsesForCodexBridge(data []byte) []byte {
 }
 
 // normalizeCopilotEffort rewrites reasoning-effort values that GitHub Copilot's
-// upstream rejects into the closest value it accepts. The Codex client exposes an
-// "ultra" tier above Copilot's ceiling of "max"; without this remap the upstream
-// returns a 400 ("Invalid value: 'ultra'"). It handles both the Responses schema
-// (reasoning.effort) and the Chat Completions schema (reasoning_effort), and is a
-// no-op for any value that is not "ultra".
-func normalizeCopilotEffort(body []byte) []byte {
+// upstream rejects into the closest supported value. "ultra" maps globally to
+// "max"; GPT-5.5 and Grok bridge aliases additionally map "max" to "xhigh".
+// It handles both Responses and Chat Completions reasoning schemas.
+func normalizeCopilotEffort(body []byte, model string) []byte {
+	baseModel := strings.ToLower(copilotBaseModelName(model))
+	isGrokBridge := isGrokClaudeBridgeModel(model)
+	maxMapsToXHigh := baseModel == "gpt-5.5-cc" || isGrokBridge
+
 	for _, path := range []string{"reasoning.effort", "reasoning_effort"} {
-		v := gjson.GetBytes(body, path)
-		if v.Exists() && strings.EqualFold(strings.TrimSpace(v.String()), "ultra") {
-			if updated, err := sjson.SetBytes(body, path, "max"); err == nil {
+		value := gjson.GetBytes(body, path)
+		if !value.Exists() {
+			continue
+		}
+		effort := strings.ToLower(strings.TrimSpace(value.String()))
+		if effort == "none" && isGrokBridge {
+			deletePath := path
+			if path == "reasoning.effort" {
+				deletePath = "reasoning"
+			}
+			if updated, err := sjson.DeleteBytes(body, deletePath); err == nil {
 				body = updated
 			}
+			continue
+		}
+		switch {
+		case effort == "ultra":
+			effort = "max"
+		case effort == "max" && maxMapsToXHigh:
+			effort = "xhigh"
+		default:
+			continue
+		}
+		if effort == "max" && maxMapsToXHigh {
+			effort = "xhigh"
+		}
+		if updated, err := sjson.SetBytes(body, path, effort); err == nil {
+			body = updated
 		}
 	}
 	return body

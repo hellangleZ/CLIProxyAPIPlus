@@ -17,7 +17,9 @@ LICENSE
 
 # Runtime data folders (should be mounted as volumes)
 auths/*
+auths-vscode-*/*
 logs/*
+logs-vscode-*/*
 conv/*
 config.yaml
 

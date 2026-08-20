@@ -61,6 +61,34 @@ func ConvertClaudeRequestToCodex(modelName string, inputRawJSON []byte, _ bool) 
 	messagesResult := rootResult.Get("messages")
 	if messagesResult.IsArray() {
 		messageResults := messagesResult.Array()
+		pendingToolUseIDs := []string{}
+		fallbackToolCallID := func(messageIndex, contentIndex int) string {
+			return fmt.Sprintf("call_%d_%d", messageIndex, contentIndex)
+		}
+		enqueueToolUseID := func(callID string) {
+			callID = strings.TrimSpace(callID)
+			if callID != "" {
+				pendingToolUseIDs = append(pendingToolUseIDs, callID)
+			}
+		}
+		consumeToolUseID := func(explicitID string, messageIndex, contentIndex int) string {
+			explicitID = strings.TrimSpace(explicitID)
+			if explicitID != "" {
+				for idx, pending := range pendingToolUseIDs {
+					if pending == explicitID {
+						pendingToolUseIDs = append(pendingToolUseIDs[:idx], pendingToolUseIDs[idx+1:]...)
+						break
+					}
+				}
+				return explicitID
+			}
+			if len(pendingToolUseIDs) > 0 {
+				callID := pendingToolUseIDs[0]
+				pendingToolUseIDs = pendingToolUseIDs[1:]
+				return callID
+			}
+			return fallbackToolCallID(messageIndex, contentIndex)
+		}
 
 		for i := 0; i < len(messageResults); i++ {
 			messageResult := messageResults[i]
@@ -135,7 +163,12 @@ func ConvertClaudeRequestToCodex(modelName string, inputRawJSON []byte, _ bool) 
 					case "tool_use":
 						flushMessage()
 						functionCallMessage := `{"type":"function_call"}`
-						functionCallMessage, _ = sjson.Set(functionCallMessage, "call_id", messageContentResult.Get("id").String())
+						callID := strings.TrimSpace(messageContentResult.Get("id").String())
+						if callID == "" {
+							callID = fallbackToolCallID(i, j)
+						}
+						enqueueToolUseID(callID)
+						functionCallMessage, _ = sjson.Set(functionCallMessage, "call_id", callID)
 						{
 							name := messageContentResult.Get("name").String()
 							toolMap := buildReverseMapFromClaudeOriginalToShort(rawJSON)
@@ -151,7 +184,7 @@ func ConvertClaudeRequestToCodex(modelName string, inputRawJSON []byte, _ bool) 
 					case "tool_result":
 						flushMessage()
 						functionCallOutputMessage := `{"type":"function_call_output"}`
-						functionCallOutputMessage, _ = sjson.Set(functionCallOutputMessage, "call_id", messageContentResult.Get("tool_use_id").String())
+						functionCallOutputMessage, _ = sjson.Set(functionCallOutputMessage, "call_id", consumeToolUseID(messageContentResult.Get("tool_use_id").String(), i, j))
 						functionCallOutputMessage, _ = sjson.Set(functionCallOutputMessage, "output", messageContentResult.Get("content").String())
 						template, _ = sjson.SetRaw(template, "input.-1", functionCallOutputMessage)
 					}

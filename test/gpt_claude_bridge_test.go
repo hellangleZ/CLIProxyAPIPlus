@@ -34,12 +34,12 @@ func TestGptClaudeBridgeThinking(t *testing.T) {
 	var bridge []*registry.ModelInfo
 	for _, m := range registry.GetGitHubCopilotModels() {
 		switch m.ID {
-		case "gpt-5.6-sol-cc", "gpt-5.6-luna-cc", "gpt-5.6-terra-cc":
+		case "gpt-5.6-sol-cc", "gpt-5.6-luna-cc", "gpt-5.6-terra-cc", "gpt-5.5-cc", "grok-4.5-cc", "grok-4.6-cc":
 			bridge = append(bridge, m)
 		}
 	}
-	if len(bridge) != 3 {
-		t.Fatalf("expected 3 bridge models registered in static list, got %d", len(bridge))
+	if len(bridge) != 6 {
+		t.Fatalf("expected 6 bridge models registered in static list, got %d", len(bridge))
 	}
 	reg.RegisterClient(uid, "github-copilot", bridge)
 	defer reg.UnregisterClient(uid)
@@ -61,7 +61,7 @@ func TestGptClaudeBridgeThinking(t *testing.T) {
 		{"budget-64000-xhigh-ceiling", `{"model":"gpt-5.6-sol-cc","max_tokens":2000,"thinking":{"type":"enabled","budget_tokens":64000},"messages":[{"role":"user","content":"hi"}]}`, "xhigh"},
 	}
 
-	models := []string{"gpt-5.6-sol-cc", "gpt-5.6-luna-cc", "gpt-5.6-terra-cc"}
+	models := []string{"gpt-5.6-sol-cc", "gpt-5.6-luna-cc", "gpt-5.6-terra-cc", "gpt-5.5-cc", "grok-4.5-cc", "grok-4.6-cc"}
 	for _, model := range models {
 		for _, tc := range cases {
 			t.Run(model+"/"+tc.name, func(t *testing.T) {
@@ -97,43 +97,94 @@ func TestGptClaudeBridgeThinking(t *testing.T) {
 	}
 }
 
+// TestGptClaudeBridgeModelCapabilities verifies model-specific context windows
+// and upstream reasoning effort levels for the non-5.6 bridge aliases.
+func TestGptClaudeBridgeModelCapabilities(t *testing.T) {
+	want := map[string]struct {
+		contextLength       int
+		maxCompletionTokens int
+		levels              []string
+	}{
+		"gpt-5.6-sol-cc":   {contextLength: 922000, maxCompletionTokens: 128000, levels: []string{"low", "medium", "high", "xhigh", "max"}},
+		"gpt-5.6-luna-cc":  {contextLength: 922000, maxCompletionTokens: 128000, levels: []string{"low", "medium", "high", "xhigh", "max"}},
+		"gpt-5.6-terra-cc": {contextLength: 922000, maxCompletionTokens: 128000, levels: []string{"low", "medium", "high", "xhigh", "max"}},
+		"gpt-5.5-cc":       {contextLength: 922000, maxCompletionTokens: 128000, levels: []string{"none", "low", "medium", "high", "xhigh", "max"}},
+		"grok-4.5-cc":      {contextLength: 500000, maxCompletionTokens: 128000, levels: []string{"none", "low", "medium", "high", "xhigh", "max"}},
+		"grok-4.6-cc":      {contextLength: 500000, maxCompletionTokens: 128000, levels: []string{"none", "low", "medium", "high", "xhigh", "max"}},
+	}
+
+	for _, model := range registry.GetGitHubCopilotModels() {
+		expected, ok := want[model.ID]
+		if !ok {
+			continue
+		}
+		if model.ContextLength != expected.contextLength {
+			t.Errorf("%s context length = %d, want %d", model.ID, model.ContextLength, expected.contextLength)
+		}
+		if model.MaxCompletionTokens != expected.maxCompletionTokens {
+			t.Errorf("%s max completion tokens = %d, want %d", model.ID, model.MaxCompletionTokens, expected.maxCompletionTokens)
+		}
+		if model.Thinking == nil {
+			t.Errorf("%s has no thinking support", model.ID)
+			continue
+		}
+		if fmt.Sprint(model.Thinking.Levels) != fmt.Sprint(expected.levels) {
+			t.Errorf("%s thinking levels = %v, want %v", model.ID, model.Thinking.Levels, expected.levels)
+		}
+		delete(want, model.ID)
+	}
+	if len(want) != 0 {
+		t.Fatalf("missing bridge model definitions: %v", want)
+	}
+}
+
 // TestGptClaudeBridgeExplicitEffort verifies the "output_config.effort" Claude
-// format (used by newer Claude clients) maps straight through to reasoning.effort,
-// including the top "max" tier that Copilot accepts for gpt-5.6.
+// format maps straight through to reasoning.effort for the GPT-5.6 family.
 func TestGptClaudeBridgeExplicitEffort(t *testing.T) {
 	reg := registry.GetGlobalRegistry()
 	uid := fmt.Sprintf("gpt-bridge-eff-%d", time.Now().UnixNano())
 
 	var bridge []*registry.ModelInfo
-	for _, m := range registry.GetGitHubCopilotModels() {
-		if m.ID == "gpt-5.6-sol-cc" {
-			bridge = append(bridge, m)
+	for _, model := range registry.GetGitHubCopilotModels() {
+		switch model.ID {
+		case "gpt-5.6-sol-cc", "gpt-5.5-cc", "grok-4.5-cc", "grok-4.6-cc":
+			bridge = append(bridge, model)
 		}
 	}
 	reg.RegisterClient(uid, "github-copilot", bridge)
 	defer reg.UnregisterClient(uid)
 
 	cases := []struct {
+		model      string
 		effort     string
 		wantEffort string
+		wantError  bool
 	}{
-		{"low", "low"},
-		{"medium", "medium"},
-		{"high", "high"},
-		{"xhigh", "xhigh"},
-		{"max", "max"},
+		{"gpt-5.6-sol-cc", "max", "max", false},
+		{"gpt-5.5-cc", "xhigh", "xhigh", false},
+		{"gpt-5.5-cc", "max", "max", false},
+		{"grok-4.5-cc", "xhigh", "xhigh", false},
+		{"grok-4.5-cc", "max", "max", false},
+		{"grok-4.6-cc", "xhigh", "xhigh", false},
+		{"grok-4.6-cc", "max", "max", false},
 	}
 	for _, tc := range cases {
-		t.Run(tc.effort, func(t *testing.T) {
-			body := fmt.Sprintf(`{"model":"gpt-5.6-sol-cc","max_tokens":2000,"output_config":{"effort":%q},"messages":[{"role":"user","content":"hi"}]}`, tc.effort)
+		t.Run(tc.model+"/"+tc.effort, func(t *testing.T) {
+			body := fmt.Sprintf(`{"model":%q,"max_tokens":2000,"output_config":{"effort":%q},"messages":[{"role":"user","content":"hi"}]}`, tc.model, tc.effort)
 			translated := sdktranslator.TranslateRequest(
 				sdktranslator.FromString("claude"),
 				sdktranslator.FromString("codex"),
-				"gpt-5.6-sol-cc",
+				tc.model,
 				[]byte(body),
 				false,
 			)
-			out, err := thinking.ApplyThinking(translated, "gpt-5.6-sol-cc", "claude", "codex", "github-copilot")
+			out, err := thinking.ApplyThinking(translated, tc.model, "claude", "codex", "github-copilot")
+			if tc.wantError {
+				if err == nil {
+					t.Fatalf("ApplyThinking accepted unsupported effort %q", tc.effort)
+				}
+				return
+			}
 			if err != nil {
 				t.Fatalf("ApplyThinking error: %v", err)
 			}

@@ -24,12 +24,16 @@ func TestGetRequestDetails_PreservesSuffix(t *testing.T) {
 	modelRegistry.RegisterClient("test-request-details-claude", "claude", []*registry.ModelInfo{
 		{ID: "claude-sonnet-4-5", Created: now + 5},
 	})
+	modelRegistry.RegisterClient("test-request-details-copilot", "github-copilot", []*registry.ModelInfo{
+		{ID: "gpt-5.6-sol-cc", Created: now + 10},
+	})
 
 	// Ensure cleanup of all test registrations.
 	clientIDs := []string{
 		"test-request-details-gemini",
 		"test-request-details-openai",
 		"test-request-details-claude",
+		"test-request-details-copilot",
 	}
 	for _, clientID := range clientIDs {
 		id := clientID
@@ -94,6 +98,13 @@ func TestGetRequestDetails_PreservesSuffix(t *testing.T) {
 			inputModel:    "claude-sonnet-4-5(auto)",
 			wantProviders: []string{"claude"},
 			wantModel:     "claude-sonnet-4-5(auto)",
+			wantErr:       false,
+		},
+		{
+			name:          "context window tag preserved",
+			inputModel:    "gpt-5.6-sol-cc[1m]",
+			wantProviders: []string{"github-copilot"},
+			wantModel:     "gpt-5.6-sol-cc[1m]",
 			wantErr:       false,
 		},
 	}

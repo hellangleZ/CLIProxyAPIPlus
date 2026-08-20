@@ -194,6 +194,30 @@ func TestCopilotIntegrationIDForModel(t *testing.T) {
 	}
 }
 
+func TestMergeCopilotIntegrationModelsOnlyAddsRoutableCLIModels(t *testing.T) {
+	vscode := []*registry.ModelInfo{
+		{ID: "gpt-5.4"},
+		{ID: "shared-model"},
+	}
+	cli := []*registry.ModelInfo{
+		{ID: "shared-model"},
+		{ID: "gpt-5.4-nano"},
+		{ID: "gpt-4.1-1m"},
+	}
+
+	got := mergeCopilotIntegrationModels(vscode, cli)
+	ids := collectModelIDs(got)
+	want := []string{"gpt-5.4", "shared-model", "gpt-4.1-1m"}
+	if len(ids) != len(want) {
+		t.Fatalf("model IDs = %v, want %v", ids, want)
+	}
+	for i := range want {
+		if ids[i] != want[i] {
+			t.Fatalf("model IDs = %v, want %v", ids, want)
+		}
+	}
+}
+
 func TestInferSupportedEndpoints(t *testing.T) {
 	tests := []struct {
 		modelID  string

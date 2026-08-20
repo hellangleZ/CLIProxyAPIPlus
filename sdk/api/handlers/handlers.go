@@ -622,6 +622,15 @@ func statusFromError(err error) int {
 	return 0
 }
 
+func stripProviderLookupContextTag(modelName string) string {
+	const oneMillionContextTag = "[1m]"
+	modelName = strings.TrimSpace(modelName)
+	if len(modelName) <= len(oneMillionContextTag) || !strings.EqualFold(modelName[len(modelName)-len(oneMillionContextTag):], oneMillionContextTag) {
+		return modelName
+	}
+	return strings.TrimSpace(modelName[:len(modelName)-len(oneMillionContextTag)])
+}
+
 func (h *BaseAPIHandler) getRequestDetails(modelName string) (providers []string, normalizedModel string, err *interfaces.ErrorMessage) {
 	resolvedModelName := modelName
 	initialSuffix := thinking.ParseSuffix(modelName)
@@ -640,6 +649,9 @@ func (h *BaseAPIHandler) getRequestDetails(modelName string) (providers []string
 	baseModel := strings.TrimSpace(parsed.ModelName)
 
 	providers = util.GetProviderName(baseModel)
+	if providerLookupModel := stripProviderLookupContextTag(baseModel); len(providers) == 0 && providerLookupModel != baseModel {
+		providers = util.GetProviderName(providerLookupModel)
+	}
 	// Fallback: if baseModel has no provider but differs from resolvedModelName,
 	// try using the full model name. This handles edge cases where custom models
 	// may be registered with their full suffixed name (e.g., "my-model(8192)").

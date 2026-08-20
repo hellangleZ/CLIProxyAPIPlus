@@ -1528,6 +1528,15 @@ func (m *Manager) GetByID(id string) (*Auth, bool) {
 	return auth.Clone(), true
 }
 
+func modelKeyForAuthMatching(model string) string {
+	modelKey := strings.TrimSpace(thinking.ParseSuffix(strings.TrimSpace(model)).ModelName)
+	const oneMillionContextTag = "[1m]"
+	if len(modelKey) > len(oneMillionContextTag) && strings.EqualFold(modelKey[len(modelKey)-len(oneMillionContextTag):], oneMillionContextTag) {
+		modelKey = strings.TrimSpace(modelKey[:len(modelKey)-len(oneMillionContextTag)])
+	}
+	return modelKey
+}
+
 func (m *Manager) pickNext(ctx context.Context, provider, model string, opts cliproxyexecutor.Options, tried map[string]struct{}) (*Auth, ProviderExecutor, error) {
 	m.mu.RLock()
 	executor, okExecutor := m.executors[provider]
@@ -1536,14 +1545,7 @@ func (m *Manager) pickNext(ctx context.Context, provider, model string, opts cli
 		return nil, nil, &Error{Code: "executor_not_found", Message: "executor not registered"}
 	}
 	candidates := make([]*Auth, 0, len(m.auths))
-	modelKey := strings.TrimSpace(model)
-	// Always use base model name (without thinking suffix) for auth matching.
-	if modelKey != "" {
-		parsed := thinking.ParseSuffix(modelKey)
-		if parsed.ModelName != "" {
-			modelKey = strings.TrimSpace(parsed.ModelName)
-		}
-	}
+	modelKey := modelKeyForAuthMatching(model)
 	registryRef := registry.GetGlobalRegistry()
 	for _, candidate := range m.auths {
 		if candidate.Provider != provider || candidate.Disabled {
@@ -1598,14 +1600,7 @@ func (m *Manager) pickNextMixed(ctx context.Context, providers []string, model s
 
 	m.mu.RLock()
 	candidates := make([]*Auth, 0, len(m.auths))
-	modelKey := strings.TrimSpace(model)
-	// Always use base model name (without thinking suffix) for auth matching.
-	if modelKey != "" {
-		parsed := thinking.ParseSuffix(modelKey)
-		if parsed.ModelName != "" {
-			modelKey = strings.TrimSpace(parsed.ModelName)
-		}
-	}
+	modelKey := modelKeyForAuthMatching(model)
 	registryRef := registry.GetGlobalRegistry()
 	for _, candidate := range m.auths {
 		if candidate == nil || candidate.Disabled {

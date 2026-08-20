@@ -66,7 +66,7 @@ func FetchGitHubCopilotModels(ctx context.Context, auth *cliproxyauth.Auth, cfg 
 	vsModels := fetchModelsWithIntegrationID(ctx, httpClient, apiToken.Token, copilotIntegrationID)
 	cliModels := fetchModelsWithIntegrationID(ctx, httpClient, apiToken.Token, copilotCLIIntegrationID)
 
-	merged := mergeModelListsDedup(vsModels, cliModels)
+	merged := mergeCopilotIntegrationModels(vsModels, cliModels)
 	if len(merged) == 0 {
 		return nil
 	}
@@ -119,12 +119,16 @@ func fetchModelsWithIntegrationID(ctx context.Context, httpClient *http.Client, 
 	return nil
 }
 
-// mergeModelListsDedup merges two model lists, deduplicating by lowercased model ID.
-// base models are kept first; extra models not already in base are appended.
-func mergeModelListsDedup(base, extra []*registry.ModelInfo) []*registry.ModelInfo {
-	seen := make(map[string]struct{}, len(base))
-	result := make([]*registry.ModelInfo, 0, len(base)+len(extra))
-	for _, m := range base {
+// mergeCopilotIntegrationModels keeps VS Code models as the default set and
+// adds only CLI-exclusive models that the executor explicitly routes through
+// the copilot-developer-cli integration.
+func mergeCopilotIntegrationModels(vscode, cli []*registry.ModelInfo) []*registry.ModelInfo {
+	seen := make(map[string]struct{}, len(vscode))
+	result := make([]*registry.ModelInfo, 0, len(vscode)+len(cli))
+	for _, m := range vscode {
+		if m == nil {
+			continue
+		}
 		key := strings.ToLower(strings.TrimSpace(m.ID))
 		if key == "" {
 			continue
@@ -132,12 +136,18 @@ func mergeModelListsDedup(base, extra []*registry.ModelInfo) []*registry.ModelIn
 		seen[key] = struct{}{}
 		result = append(result, m)
 	}
-	for _, m := range extra {
+	for _, m := range cli {
+		if m == nil {
+			continue
+		}
 		key := strings.ToLower(strings.TrimSpace(m.ID))
 		if key == "" {
 			continue
 		}
 		if _, exists := seen[key]; exists {
+			continue
+		}
+		if copilotIntegrationIDForModel(m.ID) != copilotCLIIntegrationID {
 			continue
 		}
 		seen[key] = struct{}{}

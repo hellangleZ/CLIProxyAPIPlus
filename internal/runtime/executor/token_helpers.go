@@ -160,8 +160,11 @@ func countClaudeChatTokens(enc *TokenizerWrapper, payload []byte) (int64, error)
 	// Collect messages
 	collectClaudeMessages(root.Get("messages"), &segments)
 
-	// Collect tools
+	// Collect tools and tool selection policy.
 	collectClaudeTools(root.Get("tools"), &segments)
+	if toolChoice := root.Get("tool_choice"); toolChoice.Exists() {
+		addIfNotEmpty(&segments, toolChoice.Raw)
+	}
 
 	joined := strings.TrimSpace(strings.Join(segments, "\n"))
 	if joined == "" {

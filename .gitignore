@@ -1,6 +1,6 @@
 # Binaries
-cli-proxy-api
-cliproxy
+/cli-proxy-api
+/cliproxy
 *.exe
 
 # Configuration
@@ -9,6 +9,7 @@ cliproxy
 # Generated content
 bin/*
 logs/*
+logs-vscode-*/*
 conv/*
 temp/*
 refs/*
@@ -25,6 +26,7 @@ static/*
 # Authentication data
 auths/*
 !auths/.gitkeep
+auths-vscode-*/*
 
 # Documentation
 docs/*

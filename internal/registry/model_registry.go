@@ -1050,6 +1050,12 @@ func (r *ModelRegistry) convertModelToMap(model *ModelInfo, handlerType string) 
 		if model.DisplayName != "" {
 			result["display_name"] = model.DisplayName
 		}
+		if model.ContextLength > 0 {
+			result["context_length"] = model.ContextLength
+		}
+		if model.MaxCompletionTokens > 0 {
+			result["max_completion_tokens"] = model.MaxCompletionTokens
+		}
 		// Add thinking support for Claude Code client
 		// Claude Code checks for "thinking" field (simple boolean) to enable tab toggle
 		// Also add "extended_thinking" for detailed budget info

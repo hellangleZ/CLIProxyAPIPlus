@@ -836,10 +836,7 @@ func (s *Service) registerModelsForAuth(a *coreauth.Auth) {
 		dynamicModels := executor.FetchGitHubCopilotModels(ctx, a, s.cfg)
 		cancel()
 		staticModels := registry.GetGitHubCopilotModels()
-		// Merge dynamic and static models, preferring dynamic when IDs overlap.
-		// This ensures new models from the static list are available even when the
-		// dynamic API has not yet added them (e.g. claude-opus-4.6).
-		models = mergeModelLists(dynamicModels, staticModels)
+		models = mergeCopilotModels(dynamicModels, staticModels)
 		models = applyExcludedModels(models, excluded)
 	case "kiro":
 		models = s.fetchKiroModels(a)
@@ -1077,37 +1074,53 @@ func (s *Service) oauthExcludedModels(provider, authKind string) []string {
 	return cfg.OAuthExcludedModels[providerKey]
 }
 
-// mergeModelLists merges dynamic and static model lists, preferring dynamic models when IDs overlap.
-// This ensures new models from the API are used, while keeping static models as fallback.
-func mergeModelLists(dynamic, static []*ModelInfo) []*ModelInfo {
+// mergeCopilotModels keeps a successful account-specific discovery authoritative.
+// Static models are used only as a discovery fallback, except for local -cc bridge
+// aliases whose upstream base model is present in the discovered account models.
+func mergeCopilotModels(dynamic, static []*ModelInfo) []*ModelInfo {
 	if len(dynamic) == 0 {
 		return static
 	}
-	if len(static) == 0 {
-		return dynamic
-	}
 
 	seen := make(map[string]struct{}, len(dynamic)+len(static))
+	entitled := make(map[string]struct{}, len(dynamic))
 	merged := make([]*ModelInfo, 0, len(dynamic)+len(static))
 
 	for _, model := range dynamic {
-		if model == nil || model.ID == "" {
+		if model == nil {
 			continue
 		}
-		if _, exists := seen[model.ID]; !exists {
+		key := strings.ToLower(strings.TrimSpace(model.ID))
+		if key == "" {
+			continue
+		}
+		entitled[key] = struct{}{}
+		if _, exists := seen[key]; !exists {
 			merged = append(merged, model)
-			seen[model.ID] = struct{}{}
+			seen[key] = struct{}{}
 		}
 	}
 
 	for _, model := range static {
-		if model == nil || model.ID == "" {
+		if model == nil {
 			continue
 		}
-		if _, exists := seen[model.ID]; !exists {
-			merged = append(merged, model)
-			seen[model.ID] = struct{}{}
+		key := strings.ToLower(strings.TrimSpace(model.ID))
+		if key == "" {
+			continue
 		}
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		base, isBridge := strings.CutSuffix(key, "-cc")
+		if !isBridge || base == "" {
+			continue
+		}
+		if _, ok := entitled[base]; !ok {
+			continue
+		}
+		merged = append(merged, model)
+		seen[key] = struct{}{}
 	}
 
 	return merged
