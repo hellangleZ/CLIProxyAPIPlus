@@ -2,6 +2,7 @@ package executor
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -16,6 +17,11 @@ import (
 )
 
 type githubCopilotRoundTripFunc func(*http.Request) (*http.Response, error)
+
+const (
+	grokPromptLimitErrorBody = `{"error":{"code":"invalid_request_body","message":"{\"code\":\"invalid-argument\",\"error\":\"This model's maximum prompt length is 500000 but the request contains 500271 tokens.\"}"}}`
+	solPromptLimitErrorBody  = `{"error":{"code":"invalid_request_body","message":"{\"code\":\"invalid-argument\",\"error\":\"This model's maximum prompt length is 1000000 but the request contains 1000271 tokens.\"}"}}`
+)
 
 func (f githubCopilotRoundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 	return f(req)
@@ -132,30 +138,54 @@ func TestNormalizeCopilotEffortForModel(t *testing.T) {
 	}
 }
 
-func TestNewGitHubCopilotStatusErrNormalizesGrokPromptLimit(t *testing.T) {
-	body := []byte(`{"error":{"code":"invalid_request_body","message":"{\"code\":\"invalid-argument\",\"error\":\"This model's maximum prompt length is 500000 but the request contains 500271 tokens.\"}"}}`)
-	want := "prompt is too long: 500271 tokens > 500000"
+func TestNewGitHubCopilotStatusErrNormalizesSupportedPromptLimits(t *testing.T) {
+	tests := []struct {
+		name  string
+		model string
+		body  string
+		want  string
+	}{
+		{
+			name:  "grok 4.5",
+			model: "grok-4.5-cc",
+			body:  grokPromptLimitErrorBody,
+			want:  "prompt is too long: 500271 tokens > 500000",
+		},
+		{
+			name:  "grok 4.6 with suffixes",
+			model: "grok-4.6-cc[1m](high)",
+			body:  grokPromptLimitErrorBody,
+			want:  "prompt is too long: 500271 tokens > 500000",
+		},
+		{
+			name:  "gpt 5.6 sol",
+			model: "gpt-5.6-sol-cc",
+			body:  solPromptLimitErrorBody,
+			want:  "prompt is too long: 1000271 tokens > 1000000",
+		},
+		{
+			name:  "gpt 5.6 sol with suffixes",
+			model: "gpt-5.6-sol-cc[1m](max)",
+			body:  solPromptLimitErrorBody,
+			want:  "prompt is too long: 1000271 tokens > 1000000",
+		},
+	}
 
-	for _, model := range []string{
-		"grok-4.5-cc",
-		"grok-4.6-cc",
-		"grok-4.6-cc[1m]",
-		"grok-4.6-cc[1m](high)",
-	} {
-		t.Run(model, func(t *testing.T) {
-			err := newGitHubCopilotStatusErr(http.StatusBadRequest, body, model)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := newGitHubCopilotStatusErr(http.StatusBadRequest, []byte(tc.body), tc.model)
 			if err.code != http.StatusBadRequest {
 				t.Fatalf("status code = %d, want %d", err.code, http.StatusBadRequest)
 			}
-			if err.msg != want {
-				t.Fatalf("message = %q, want %q", err.msg, want)
+			if err.msg != tc.want {
+				t.Fatalf("message = %q, want %q", err.msg, tc.want)
 			}
 		})
 	}
 }
 
 func TestNewGitHubCopilotStatusErrLeavesUnrelatedErrorsUntouched(t *testing.T) {
-	contextLimitBody := []byte(`{"error":{"code":"invalid_request_body","message":"{\"code\":\"invalid-argument\",\"error\":\"This model's maximum prompt length is 500000 but the request contains 500271 tokens.\"}"}}`)
+	contextLimitBody := []byte(grokPromptLimitErrorBody)
 
 	tests := []struct {
 		name   string
@@ -164,9 +194,21 @@ func TestNewGitHubCopilotStatusErrLeavesUnrelatedErrorsUntouched(t *testing.T) {
 		body   []byte
 	}{
 		{
-			name:   "gpt bridge alias",
+			name:   "gpt luna bridge alias",
 			status: http.StatusBadRequest,
-			model:  "gpt-5.6-sol-cc",
+			model:  "gpt-5.6-luna-cc",
+			body:   contextLimitBody,
+		},
+		{
+			name:   "gpt terra bridge alias",
+			status: http.StatusBadRequest,
+			model:  "gpt-5.6-terra-cc",
+			body:   contextLimitBody,
+		},
+		{
+			name:   "plain gpt sol model",
+			status: http.StatusBadRequest,
+			model:  "gpt-5.6-sol",
 			body:   contextLimitBody,
 		},
 		{
@@ -226,8 +268,36 @@ func TestNewGitHubCopilotStatusErrLeavesUnrelatedErrorsUntouched(t *testing.T) {
 	}
 }
 
-func TestGitHubCopilotExecutePathsNormalizeGrokPromptLimit(t *testing.T) {
-	const upstreamBody = `{"error":{"code":"invalid_request_body","message":"{\"code\":\"invalid-argument\",\"error\":\"This model's maximum prompt length is 500000 but the request contains 500271 tokens.\"}"}}`
+func TestGitHubCopilotExecutePathsNormalizePromptLimit(t *testing.T) {
+	tests := []struct {
+		name         string
+		model        string
+		upstreamBody string
+		want         string
+	}{
+		{
+			name:         "grok 4.6",
+			model:        "grok-4.6-cc",
+			upstreamBody: grokPromptLimitErrorBody,
+			want:         "prompt is too long: 500271 tokens > 500000",
+		},
+		{
+			name:         "gpt 5.6 sol",
+			model:        "gpt-5.6-sol-cc",
+			upstreamBody: solPromptLimitErrorBody,
+			want:         "prompt is too long: 1000271 tokens > 1000000",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			testGitHubCopilotExecutePathsNormalizePromptLimit(t, tc.model, tc.upstreamBody, tc.want)
+		})
+	}
+}
+
+func testGitHubCopilotExecutePathsNormalizePromptLimit(t *testing.T, model, upstreamBody, want string) {
+	t.Helper()
 	transport := githubCopilotRoundTripFunc(func(req *http.Request) (*http.Response, error) {
 		return &http.Response{
 			StatusCode: http.StatusBadRequest,
@@ -261,8 +331,8 @@ func TestGitHubCopilotExecutePathsNormalizeGrokPromptLimit(t *testing.T) {
 		ID:       "test-github-copilot-auth",
 		Metadata: map[string]any{"access_token": accessToken},
 	}
-	payload := []byte(`{"model":"grok-4.6-cc","max_tokens":16,"messages":[{"role":"user","content":"hello"}]}`)
-	req := cliproxyexecutor.Request{Model: "grok-4.6-cc", Payload: payload}
+	payload := []byte(fmt.Sprintf(`{"model":%q,"max_tokens":16,"messages":[{"role":"user","content":"hello"}]}`, model))
+	req := cliproxyexecutor.Request{Model: model, Payload: payload}
 	opts := cliproxyexecutor.Options{
 		OriginalRequest: payload,
 		SourceFormat:    sdktranslator.FromString("claude"),
@@ -297,8 +367,8 @@ func TestGitHubCopilotExecutePathsNormalizeGrokPromptLimit(t *testing.T) {
 			if err == nil {
 				t.Fatal("expected upstream error")
 			}
-			if got := err.Error(); got != "prompt is too long: 500271 tokens > 500000" {
-				t.Fatalf("error = %q, want normalized prompt limit", got)
+			if got := err.Error(); got != want {
+				t.Fatalf("error = %q, want %q", got, want)
 			}
 			statusErr, ok := err.(interface{ StatusCode() int })
 			if !ok || statusErr.StatusCode() != http.StatusBadRequest {

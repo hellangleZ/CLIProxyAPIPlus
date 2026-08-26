@@ -549,12 +549,20 @@ func isGrokClaudeBridgeModel(model string) bool {
 	return base == "grok-4.5-cc" || base == "grok-4.6-cc"
 }
 
+func supportsCopilotPromptLimitNormalization(model string) bool {
+	if isGrokClaudeBridgeModel(model) {
+		return true
+	}
+	base := strings.ToLower(strings.TrimSpace(copilotBaseModelName(model)))
+	return base == "gpt-5.6-sol-cc"
+}
+
 // newGitHubCopilotStatusErr preserves upstream errors except for the exact
-// nested prompt-limit response returned by Grok bridge models. Claude Code
+// nested prompt-limit response returned by selected bridge models. Claude Code
 // recognizes the normalized message and can start its reactive compact flow.
 func newGitHubCopilotStatusErr(statusCode int, body []byte, model string) statusErr {
 	err := statusErr{code: statusCode, msg: string(body)}
-	if statusCode != http.StatusBadRequest || !isGrokClaudeBridgeModel(model) || !gjson.ValidBytes(body) {
+	if statusCode != http.StatusBadRequest || !supportsCopilotPromptLimitNormalization(model) || !gjson.ValidBytes(body) {
 		return err
 	}
 
