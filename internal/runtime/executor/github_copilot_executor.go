@@ -549,17 +549,20 @@ func isGrokClaudeBridgeModel(model string) bool {
 	return base == "grok-4.5-cc" || base == "grok-4.6-cc"
 }
 
-func supportsCopilotPromptLimitNormalization(model string) bool {
-	if isGrokClaudeBridgeModel(model) {
-		return true
-	}
+func isGPT56SolClaudeBridgeModel(model string) bool {
 	base := strings.ToLower(strings.TrimSpace(copilotBaseModelName(model)))
 	return base == "gpt-5.6-sol-cc"
 }
 
-// newGitHubCopilotStatusErr preserves upstream errors except for the exact
-// nested prompt-limit response returned by selected bridge models. Claude Code
-// recognizes the normalized message and can start its reactive compact flow.
+func supportsCopilotPromptLimitNormalization(model string) bool {
+	return isGrokClaudeBridgeModel(model) || isGPT56SolClaudeBridgeModel(model)
+}
+
+const copilotSolContextWindowExceededMessage = "Your input exceeds the context window of this model. Please adjust your input and try again."
+
+// newGitHubCopilotStatusErr preserves upstream errors except for exact known
+// prompt-limit responses from selected bridge models. Claude Code recognizes
+// the normalized message and can start its reactive compact flow.
 func newGitHubCopilotStatusErr(statusCode int, body []byte, model string) statusErr {
 	err := statusErr{code: statusCode, msg: string(body)}
 	if statusCode != http.StatusBadRequest || !supportsCopilotPromptLimitNormalization(model) || !gjson.ValidBytes(body) {
@@ -569,6 +572,10 @@ func newGitHubCopilotStatusErr(statusCode int, body []byte, model string) status
 	outerCode := gjson.GetBytes(body, "error.code")
 	outerMessage := gjson.GetBytes(body, "error.message")
 	if outerCode.Type != gjson.String || outerCode.String() != "invalid_request_body" || outerMessage.Type != gjson.String {
+		return err
+	}
+	if isGPT56SolClaudeBridgeModel(model) && outerMessage.String() == copilotSolContextWindowExceededMessage {
+		err.msg = "prompt is too long"
 		return err
 	}
 

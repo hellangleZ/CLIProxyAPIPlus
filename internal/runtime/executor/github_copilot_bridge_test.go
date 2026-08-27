@@ -19,8 +19,10 @@ import (
 type githubCopilotRoundTripFunc func(*http.Request) (*http.Response, error)
 
 const (
-	grokPromptLimitErrorBody = `{"error":{"code":"invalid_request_body","message":"{\"code\":\"invalid-argument\",\"error\":\"This model's maximum prompt length is 500000 but the request contains 500271 tokens.\"}"}}`
-	solPromptLimitErrorBody  = `{"error":{"code":"invalid_request_body","message":"{\"code\":\"invalid-argument\",\"error\":\"This model's maximum prompt length is 1000000 but the request contains 1000271 tokens.\"}"}}`
+	grokPromptLimitErrorBody       = `{"error":{"code":"invalid_request_body","message":"{\"code\":\"invalid-argument\",\"error\":\"This model's maximum prompt length is 500000 but the request contains 500271 tokens.\"}"}}`
+	solPromptLimitErrorBody        = `{"error":{"code":"invalid_request_body","message":"{\"code\":\"invalid-argument\",\"error\":\"This model's maximum prompt length is 1000000 but the request contains 1000271 tokens.\"}"}}`
+	solContextWindowErrorBody      = `{"error":{"message":"Your input exceeds the context window of this model. Please adjust your input and try again.","code":"invalid_request_body"}}`
+	standardPromptTooLongErrorText = "prompt is too long"
 )
 
 func (f githubCopilotRoundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -158,16 +160,22 @@ func TestNewGitHubCopilotStatusErrNormalizesSupportedPromptLimits(t *testing.T) 
 			want:  "prompt is too long: 500271 tokens > 500000",
 		},
 		{
-			name:  "gpt 5.6 sol",
+			name:  "gpt 5.6 sol nested limit",
 			model: "gpt-5.6-sol-cc",
 			body:  solPromptLimitErrorBody,
 			want:  "prompt is too long: 1000271 tokens > 1000000",
 		},
 		{
-			name:  "gpt 5.6 sol with suffixes",
+			name:  "gpt 5.6 sol direct context error",
+			model: "gpt-5.6-sol-cc",
+			body:  solContextWindowErrorBody,
+			want:  standardPromptTooLongErrorText,
+		},
+		{
+			name:  "gpt 5.6 sol direct context error with suffixes",
 			model: "gpt-5.6-sol-cc[1m](max)",
-			body:  solPromptLimitErrorBody,
-			want:  "prompt is too long: 1000271 tokens > 1000000",
+			body:  solContextWindowErrorBody,
+			want:  standardPromptTooLongErrorText,
 		},
 	}
 
@@ -197,19 +205,19 @@ func TestNewGitHubCopilotStatusErrLeavesUnrelatedErrorsUntouched(t *testing.T) {
 			name:   "gpt luna bridge alias",
 			status: http.StatusBadRequest,
 			model:  "gpt-5.6-luna-cc",
-			body:   contextLimitBody,
+			body:   []byte(solContextWindowErrorBody),
 		},
 		{
 			name:   "gpt terra bridge alias",
 			status: http.StatusBadRequest,
 			model:  "gpt-5.6-terra-cc",
-			body:   contextLimitBody,
+			body:   []byte(solContextWindowErrorBody),
 		},
 		{
 			name:   "plain gpt sol model",
 			status: http.StatusBadRequest,
 			model:  "gpt-5.6-sol",
-			body:   contextLimitBody,
+			body:   []byte(solContextWindowErrorBody),
 		},
 		{
 			name:   "plain grok model",
@@ -284,8 +292,8 @@ func TestGitHubCopilotExecutePathsNormalizePromptLimit(t *testing.T) {
 		{
 			name:         "gpt 5.6 sol",
 			model:        "gpt-5.6-sol-cc",
-			upstreamBody: solPromptLimitErrorBody,
-			want:         "prompt is too long: 1000271 tokens > 1000000",
+			upstreamBody: solContextWindowErrorBody,
+			want:         standardPromptTooLongErrorText,
 		},
 	}
 
