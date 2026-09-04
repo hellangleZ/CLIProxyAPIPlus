@@ -231,7 +231,10 @@ func (e *GitHubCopilotExecutor) Execute(ctx context.Context, auth *cliproxyauth.
 
 	var param any
 	converted := sdktranslator.TranslateNonStream(ctx, to, from, req.Model, originalPayload, body, data, &param)
-	resp = cliproxyexecutor.Response{Payload: []byte(converted)}
+	convertedPayload := []byte(converted)
+	agentModelPolicy := newGrok46AgentModelPolicy(responsesBridgeActive, req.Model, originalPayload)
+	convertedPayload = normalizeGrok46ClaudeAgentModels(convertedPayload, agentModelPolicy)
+	resp = cliproxyexecutor.Response{Payload: convertedPayload}
 	reporter.ensurePublished(ctx)
 	return resp, nil
 }
@@ -363,6 +366,8 @@ func (e *GitHubCopilotExecutor) ExecuteStream(ctx context.Context, auth *cliprox
 		scanner := bufio.NewScanner(httpResp.Body)
 		scanner.Buffer(nil, maxScannerBufferSize)
 		var param any
+		agentModelPolicy := newGrok46AgentModelPolicy(responsesBridgeActive, req.Model, originalPayload)
+		agentModelNormalizer := newGrok46AgentModelStreamNormalizer(agentModelPolicy)
 
 		for scanner.Scan() {
 			line := scanner.Bytes()
@@ -386,7 +391,10 @@ func (e *GitHubCopilotExecutor) ExecuteStream(ctx context.Context, auth *cliprox
 			translatedLine := normalizeGemini38ReasoningResponse(bytes.Clone(line), req.Model)
 			chunks := sdktranslator.TranslateStream(ctx, to, from, req.Model, originalPayload, body, translatedLine, &param)
 			for i := range chunks {
-				out <- cliproxyexecutor.StreamChunk{Payload: []byte(chunks[i])}
+				payload := agentModelNormalizer.normalize([]byte(chunks[i]))
+				if len(payload) > 0 {
+					out <- cliproxyexecutor.StreamChunk{Payload: payload}
+				}
 			}
 		}
 
