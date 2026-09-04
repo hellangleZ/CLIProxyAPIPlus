@@ -12,6 +12,7 @@ func TestModelKeyForAuthMatching(t *testing.T) {
 		{name: "thinking suffix", model: "gpt-5.6-sol-cc(high)", want: "gpt-5.6-sol-cc"},
 		{name: "context tag", model: "gpt-5.6-sol-cc[1m]", want: "gpt-5.6-sol-cc"},
 		{name: "context tag before thinking suffix", model: "gpt-5.6-sol-cc[1M](high)", want: "gpt-5.6-sol-cc"},
+		{name: "gemini context and thinking suffix", model: "gemini-3.8-flash-cc[1m](high)", want: "gemini-3.8-flash-cc"},
 		{name: "unknown tag preserved", model: "custom-model[preview]", want: "custom-model[preview]"},
 	}
 

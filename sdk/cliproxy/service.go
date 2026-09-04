@@ -1083,7 +1083,7 @@ func mergeCopilotModels(dynamic, static []*ModelInfo) []*ModelInfo {
 	}
 
 	seen := make(map[string]struct{}, len(dynamic)+len(static))
-	entitled := make(map[string]struct{}, len(dynamic))
+	entitled := make(map[string]*ModelInfo, len(dynamic))
 	merged := make([]*ModelInfo, 0, len(dynamic)+len(static))
 
 	for _, model := range dynamic {
@@ -1094,7 +1094,7 @@ func mergeCopilotModels(dynamic, static []*ModelInfo) []*ModelInfo {
 		if key == "" {
 			continue
 		}
-		entitled[key] = struct{}{}
+		entitled[key] = model
 		if _, exists := seen[key]; !exists {
 			merged = append(merged, model)
 			seen[key] = struct{}{}
@@ -1116,14 +1116,32 @@ func mergeCopilotModels(dynamic, static []*ModelInfo) []*ModelInfo {
 		if !isBridge || base == "" {
 			continue
 		}
-		if _, ok := entitled[base]; !ok {
+		baseModel, ok := entitled[base]
+		if !ok {
 			continue
 		}
-		merged = append(merged, model)
+		merged = append(merged, accountScopedCopilotBridgeAlias(model, baseModel))
 		seen[key] = struct{}{}
 	}
 
 	return merged
+}
+
+// accountScopedCopilotBridgeAlias preserves alias-specific routing and thinking
+// metadata while using the dynamically discovered per-account limits for models
+// whose Copilot entitlements vary between accounts.
+func accountScopedCopilotBridgeAlias(alias, base *ModelInfo) *ModelInfo {
+	if alias == nil || base == nil || !strings.EqualFold(strings.TrimSpace(alias.ID), "gemini-3.8-flash-cc") {
+		return alias
+	}
+	clone := *alias
+	if base.ContextLength > 0 {
+		clone.ContextLength = base.ContextLength
+	}
+	if base.MaxCompletionTokens > 0 {
+		clone.MaxCompletionTokens = base.MaxCompletionTokens
+	}
+	return &clone
 }
 
 func applyExcludedModels(models []*ModelInfo, excluded []string) []*ModelInfo {

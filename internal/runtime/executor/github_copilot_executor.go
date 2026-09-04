@@ -113,10 +113,15 @@ func (e *GitHubCopilotExecutor) Execute(ctx context.Context, auth *cliproxyauth.
 	defer reporter.trackFailure(ctx, &err)
 
 	from := opts.SourceFormat
-	bridgeModel, bridgeActive := claudeResponsesBridgeModel(req.Model, from)
-	useResponses := useGitHubCopilotResponsesEndpoint(from) || bridgeActive
+	bridgeModel, responsesBridgeActive := claudeResponsesBridgeModel(req.Model, from)
+	chatBridgeModel, chatBridgeActive := gemini38ChatBridgeModel(req.Model, from)
+	if chatBridgeActive {
+		bridgeModel = chatBridgeModel
+	}
+	bridgeActive := responsesBridgeActive || chatBridgeActive
+	useResponses := (useGitHubCopilotResponsesEndpoint(from) && !chatBridgeActive) || responsesBridgeActive
 	to := sdktranslator.FromString("openai")
-	if bridgeActive {
+	if responsesBridgeActive {
 		to = sdktranslator.FromString("codex")
 	} else if useResponses {
 		to = sdktranslator.FromString("openai-response")
@@ -130,6 +135,9 @@ func (e *GitHubCopilotExecutor) Execute(ctx context.Context, auth *cliproxyauth.
 	body = e.normalizeModel(req.Model, body)
 	requestedModel := payloadRequestedModel(opts, req.Model)
 	body = applyPayloadConfigWithRoot(e.cfg, req.Model, to.String(), "", body, originalTranslated, requestedModel)
+	if isGemini38ClaudeBridgeModel(req.Model) {
+		body = normalizeGemini38RequestEffort(body, req.Model)
+	}
 	body, err = thinking.ApplyThinking(body, req.Model, from.String(), to.String(), "github-copilot")
 	if err != nil {
 		log.Debugf("github-copilot executor: thinking validation: %v", err)
@@ -137,6 +145,7 @@ func (e *GitHubCopilotExecutor) Execute(ctx context.Context, auth *cliproxyauth.
 	body = normalizeCopilotEffort(body, req.Model)
 	if bridgeActive {
 		body = rewriteBridgeModel(body, bridgeModel)
+		body = forceTextForClaudeCodeCompactRequest(body, originalPayload, req.Model)
 	}
 	body, _ = sjson.SetBytes(body, "stream", false)
 	if useResponses {
@@ -215,7 +224,8 @@ func (e *GitHubCopilotExecutor) Execute(ctx context.Context, auth *cliproxyauth.
 		reporter.publish(ctx, detail)
 	}
 
-	if bridgeActive {
+	data = normalizeGemini38ReasoningResponse(data, req.Model)
+	if responsesBridgeActive {
 		data = wrapResponsesForCodexBridge(data)
 	}
 
@@ -237,10 +247,15 @@ func (e *GitHubCopilotExecutor) ExecuteStream(ctx context.Context, auth *cliprox
 	defer reporter.trackFailure(ctx, &err)
 
 	from := opts.SourceFormat
-	bridgeModel, bridgeActive := claudeResponsesBridgeModel(req.Model, from)
-	useResponses := useGitHubCopilotResponsesEndpoint(from) || bridgeActive
+	bridgeModel, responsesBridgeActive := claudeResponsesBridgeModel(req.Model, from)
+	chatBridgeModel, chatBridgeActive := gemini38ChatBridgeModel(req.Model, from)
+	if chatBridgeActive {
+		bridgeModel = chatBridgeModel
+	}
+	bridgeActive := responsesBridgeActive || chatBridgeActive
+	useResponses := (useGitHubCopilotResponsesEndpoint(from) && !chatBridgeActive) || responsesBridgeActive
 	to := sdktranslator.FromString("openai")
-	if bridgeActive {
+	if responsesBridgeActive {
 		to = sdktranslator.FromString("codex")
 	} else if useResponses {
 		to = sdktranslator.FromString("openai-response")
@@ -254,6 +269,9 @@ func (e *GitHubCopilotExecutor) ExecuteStream(ctx context.Context, auth *cliprox
 	body = e.normalizeModel(req.Model, body)
 	requestedModel := payloadRequestedModel(opts, req.Model)
 	body = applyPayloadConfigWithRoot(e.cfg, req.Model, to.String(), "", body, originalTranslated, requestedModel)
+	if isGemini38ClaudeBridgeModel(req.Model) {
+		body = normalizeGemini38RequestEffort(body, req.Model)
+	}
 	body, err = thinking.ApplyThinking(body, req.Model, from.String(), to.String(), "github-copilot")
 	if err != nil {
 		log.Debugf("github-copilot executor: thinking validation: %v", err)
@@ -261,6 +279,7 @@ func (e *GitHubCopilotExecutor) ExecuteStream(ctx context.Context, auth *cliprox
 	body = normalizeCopilotEffort(body, req.Model)
 	if bridgeActive {
 		body = rewriteBridgeModel(body, bridgeModel)
+		body = forceTextForClaudeCodeCompactRequest(body, originalPayload, req.Model)
 	}
 	body, _ = sjson.SetBytes(body, "stream", true)
 	if useResponses {
@@ -364,7 +383,8 @@ func (e *GitHubCopilotExecutor) ExecuteStream(ctx context.Context, auth *cliprox
 				}
 			}
 
-			chunks := sdktranslator.TranslateStream(ctx, to, from, req.Model, originalPayload, body, bytes.Clone(line), &param)
+			translatedLine := normalizeGemini38ReasoningResponse(bytes.Clone(line), req.Model)
+			chunks := sdktranslator.TranslateStream(ctx, to, from, req.Model, originalPayload, body, translatedLine, &param)
 			for i := range chunks {
 				out <- cliproxyexecutor.StreamChunk{Payload: []byte(chunks[i])}
 			}
@@ -554,56 +574,6 @@ func isGPT56SolClaudeBridgeModel(model string) bool {
 	return base == "gpt-5.6-sol-cc"
 }
 
-func supportsCopilotPromptLimitNormalization(model string) bool {
-	return isGrokClaudeBridgeModel(model) || isGPT56SolClaudeBridgeModel(model)
-}
-
-const copilotSolContextWindowExceededMessage = "Your input exceeds the context window of this model. Please adjust your input and try again."
-
-// newGitHubCopilotStatusErr preserves upstream errors except for exact known
-// prompt-limit responses from selected bridge models. Claude Code recognizes
-// the normalized message and can start its reactive compact flow.
-func newGitHubCopilotStatusErr(statusCode int, body []byte, model string) statusErr {
-	err := statusErr{code: statusCode, msg: string(body)}
-	if statusCode != http.StatusBadRequest || !supportsCopilotPromptLimitNormalization(model) || !gjson.ValidBytes(body) {
-		return err
-	}
-
-	outerCode := gjson.GetBytes(body, "error.code")
-	outerMessage := gjson.GetBytes(body, "error.message")
-	if outerCode.Type != gjson.String || outerCode.String() != "invalid_request_body" || outerMessage.Type != gjson.String {
-		return err
-	}
-	if isGPT56SolClaudeBridgeModel(model) && outerMessage.String() == copilotSolContextWindowExceededMessage {
-		err.msg = "prompt is too long"
-		return err
-	}
-
-	nestedBody := []byte(outerMessage.String())
-	if !gjson.ValidBytes(nestedBody) {
-		return err
-	}
-	innerCode := gjson.GetBytes(nestedBody, "code")
-	innerMessage := gjson.GetBytes(nestedBody, "error")
-	if innerCode.Type != gjson.String || innerCode.String() != "invalid-argument" || innerMessage.Type != gjson.String {
-		return err
-	}
-
-	message := innerMessage.String()
-	var limit, actual int64
-	matched, scanErr := fmt.Sscanf(message, "This model's maximum prompt length is %d but the request contains %d tokens.", &limit, &actual)
-	if scanErr != nil || matched != 2 || actual <= limit {
-		return err
-	}
-	expected := fmt.Sprintf("This model's maximum prompt length is %d but the request contains %d tokens.", limit, actual)
-	if message != expected {
-		return err
-	}
-
-	err.msg = fmt.Sprintf("prompt is too long: %d tokens > %d", actual, limit)
-	return err
-}
-
 // isCopilotCLIModel reports whether the model requires the copilot-developer-cli
 // integration ID. CLI-exclusive models (e.g. 1M-context variants) are identified
 // by the "-1m" suffix in their base name.
@@ -635,6 +605,9 @@ const claudeBridgeSuffix = "-cc"
 // Responses clients hitting the un-suffixed model) is left untouched.
 func claudeResponsesBridgeModel(model string, sourceFormat sdktranslator.Format) (string, bool) {
 	if sourceFormat.String() != "claude" {
+		return model, false
+	}
+	if isGemini38ClaudeBridgeModel(model) {
 		return model, false
 	}
 	base := copilotBaseModelName(model)
@@ -740,10 +713,13 @@ func wrapResponsesForCodexBridge(data []byte) []byte {
 // normalizeCopilotEffort rewrites reasoning-effort values that GitHub Copilot's
 // upstream rejects into the closest supported value. "ultra" maps globally to
 // "max"; GPT-5.5 and Grok bridge aliases additionally map "max" to "xhigh".
+// Gemini 3.8 Flash supports only low/medium/high, so its alias clamps lower and
+// higher extension values without changing any other Gemini model.
 // It handles both Responses and Chat Completions reasoning schemas.
 func normalizeCopilotEffort(body []byte, model string) []byte {
 	baseModel := strings.ToLower(copilotBaseModelName(model))
 	isGrokBridge := isGrokClaudeBridgeModel(model)
+	isGemini38Bridge := isGemini38ClaudeBridgeModel(model)
 	maxMapsToXHigh := baseModel == "gpt-5.5-cc" || isGrokBridge
 
 	for _, path := range []string{"reasoning.effort", "reasoning_effort"} {
@@ -752,6 +728,20 @@ func normalizeCopilotEffort(body []byte, model string) []byte {
 			continue
 		}
 		effort := strings.ToLower(strings.TrimSpace(value.String()))
+		if isGemini38Bridge {
+			switch effort {
+			case "none", "minimal":
+				effort = "low"
+			case "xhigh", "max", "ultra":
+				effort = "high"
+			default:
+				continue
+			}
+			if updated, err := sjson.SetBytes(body, path, effort); err == nil {
+				body = updated
+			}
+			continue
+		}
 		if effort == "none" && isGrokBridge {
 			deletePath := path
 			if path == "reasoning.effort" {

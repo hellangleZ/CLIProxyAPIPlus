@@ -22,7 +22,9 @@ const (
 	grokPromptLimitErrorBody       = `{"error":{"code":"invalid_request_body","message":"{\"code\":\"invalid-argument\",\"error\":\"This model's maximum prompt length is 500000 but the request contains 500271 tokens.\"}"}}`
 	solPromptLimitErrorBody        = `{"error":{"code":"invalid_request_body","message":"{\"code\":\"invalid-argument\",\"error\":\"This model's maximum prompt length is 1000000 but the request contains 1000271 tokens.\"}"}}`
 	solContextWindowErrorBody      = `{"error":{"message":"Your input exceeds the context window of this model. Please adjust your input and try again.","code":"invalid_request_body"}}`
+	geminiPromptLimitErrorBody     = `{"error":{"message":"invalid request body","code":"invalid_request_body"}}`
 	standardPromptTooLongErrorText = "prompt is too long"
+	claudeCodeCompactPromptText    = "CRITICAL: Respond with TEXT ONLY. Do NOT call any tools.\n\nYour task is to create a detailed summary of the conversation so far."
 )
 
 func (f githubCopilotRoundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -46,6 +48,7 @@ func TestClaudeResponsesBridgeModel(t *testing.T) {
 		{"gpt 5.5 bridge", "gpt-5.5-cc", claude, "gpt-5.5", true},
 		{"grok 4.5 bridge", "grok-4.5-cc", claude, "grok-4.5", true},
 		{"grok 4.6 bridge", "grok-4.6-cc", claude, "grok-4.6", true},
+		{"gemini chat alias is not a responses bridge", "gemini-3.8-flash-cc", claude, "gemini-3.8-flash-cc", false},
 		{"bridge with thinking suffix", "gpt-5.6-sol-cc(high)", claude, "gpt-5.6-sol", true},
 		{"bridge with context tag", "gpt-5.6-sol-cc[1m]", claude, "gpt-5.6-sol", true},
 		{"non-claude source untouched", "gpt-5.6-sol-cc", responses, "gpt-5.6-sol-cc", false},
@@ -126,8 +129,13 @@ func TestNormalizeCopilotEffortForModel(t *testing.T) {
 		{"context tag", "gpt-5.5-cc[1m]", `{"reasoning":{"effort":"max"}}`, "reasoning.effort", "xhigh"},
 		{"gpt 5.6 max", "gpt-5.6-sol-cc", `{"reasoning":{"effort":"max"}}`, "reasoning.effort", "max"},
 		{"chat schema", "gpt-5.5-cc", `{"reasoning_effort":"max"}`, "reasoning_effort", "xhigh"},
+		{"gemini max maps to high", "gemini-3.8-flash-cc", `{"reasoning_effort":"max"}`, "reasoning_effort", "high"},
+		{"gemini xhigh maps to high", "gemini-3.8-flash-cc[1m](xhigh)", `{"reasoning_effort":"xhigh"}`, "reasoning_effort", "high"},
+		{"gemini none maps to low", "gemini-3.8-flash-cc", `{"reasoning_effort":"none"}`, "reasoning_effort", "low"},
+		{"plain gemini max unchanged", "gemini-3.8-flash", `{"reasoning_effort":"max"}`, "reasoning_effort", "max"},
 		{"high unchanged", "gpt-5.5-cc", `{"reasoning":{"effort":"high"}}`, "reasoning.effort", "high"},
 		{"ultra remains global max", "gpt-5.6-sol-cc", `{"reasoning":{"effort":"ultra"}}`, "reasoning.effort", "max"},
+		{"gemini ultra maps to high", "gemini-3.8-flash-cc", `{"reasoning_effort":"ultra"}`, "reasoning_effort", "high"},
 	}
 
 	for _, tc := range cases {
@@ -135,6 +143,103 @@ func TestNormalizeCopilotEffortForModel(t *testing.T) {
 			out := normalizeCopilotEffort([]byte(tc.body), tc.model)
 			if got := gjson.GetBytes(out, tc.path).String(); got != tc.wantEffort {
 				t.Fatalf("effort = %q, want %q (body=%s)", got, tc.wantEffort, string(out))
+			}
+		})
+	}
+}
+
+func TestForceTextForClaudeCodeCompactRequest(t *testing.T) {
+	originalPayload := []byte(fmt.Sprintf(`{"model":"gpt-5.6-sol-cc","messages":[{"role":"user","content":"old context"},{"role":"user","content":[{"type":"tool_result","tool_use_id":"tool_1","content":"done"},{"type":"text","text":%q}]},{"role":"system","content":"token budget"}],"tools":[{"name":"Bash"}]}`, claudeCodeCompactPromptText))
+	translatedBody := []byte(`{"model":"gpt-5.6-sol","input":[{"type":"message","role":"user","content":[]}],"tools":[{"type":"function","name":"Bash"}],"tool_choice":"auto","parallel_tool_calls":true,"reasoning":{"effort":"max","summary":"auto"}}`)
+
+	out := forceTextForClaudeCodeCompactRequest(translatedBody, originalPayload, "gpt-5.6-sol-cc[1m](max)")
+
+	if got := gjson.GetBytes(out, "tool_choice").String(); got != "none" {
+		t.Fatalf("tool_choice = %q, want none (body=%s)", got, string(out))
+	}
+	if got := gjson.GetBytes(out, "tools.#").Int(); got != 1 {
+		t.Fatalf("tools count = %d, want 1 (body=%s)", got, string(out))
+	}
+	if !gjson.GetBytes(out, "parallel_tool_calls").Bool() {
+		t.Fatalf("parallel_tool_calls changed: %s", string(out))
+	}
+	if got := gjson.GetBytes(out, "reasoning.effort").String(); got != "max" {
+		t.Fatalf("reasoning effort = %q, want max (body=%s)", got, string(out))
+	}
+	if got := gjson.GetBytes(out, "input.0.role").String(); got != "user" {
+		t.Fatalf("input history changed: %s", string(out))
+	}
+
+	withoutTools := []byte(`{"model":"gpt-5.6-sol","reasoning":{"effort":"max"}}`)
+	if got := forceTextForClaudeCodeCompactRequest(withoutTools, originalPayload, "gpt-5.6-sol-cc"); string(got) != string(withoutTools) {
+		t.Fatalf("compact request without tools changed unexpectedly: %s", string(got))
+	}
+
+	geminiBody := []byte(`{"model":"gemini-3.8-flash","messages":[{"role":"user","content":"old context"}],"tools":[{"type":"function","function":{"name":"Bash"}}],"tool_choice":"auto","parallel_tool_calls":true,"reasoning_effort":"high"}`)
+	geminiOut := forceTextForClaudeCodeCompactRequest(geminiBody, originalPayload, "gemini-3.8-flash-cc[1m](high)")
+	if got := gjson.GetBytes(geminiOut, "tool_choice").String(); got != "none" {
+		t.Fatalf("Gemini tool_choice = %q, want none (body=%s)", got, string(geminiOut))
+	}
+	if got := gjson.GetBytes(geminiOut, "tools.#").Int(); got != 1 {
+		t.Fatalf("Gemini tools count = %d, want 1 (body=%s)", got, string(geminiOut))
+	}
+	if got := gjson.GetBytes(geminiOut, "reasoning_effort").String(); got != "high" {
+		t.Fatalf("Gemini reasoning effort = %q, want high (body=%s)", got, string(geminiOut))
+	}
+}
+
+func TestForceTextForClaudeCodeCompactRequestLeavesOtherRequestsUntouched(t *testing.T) {
+	translatedBody := []byte(`{"model":"gpt-5.6-sol","tools":[{"type":"function","name":"Bash"}],"tool_choice":"auto","parallel_tool_calls":true,"reasoning":{"effort":"max"}}`)
+	compactPayload := fmt.Sprintf(`{"messages":[{"role":"user","content":[{"type":"text","text":%q}]}]}`, claudeCodeCompactPromptText)
+
+	tests := []struct {
+		name    string
+		model   string
+		payload string
+	}{
+		{
+			name:    "ordinary sol request",
+			model:   "gpt-5.6-sol-cc",
+			payload: `{"messages":[{"role":"user","content":"continue"}]}`,
+		},
+		{
+			name:    "ordinary gemini request",
+			model:   "gemini-3.8-flash-cc",
+			payload: `{"messages":[{"role":"user","content":"continue"}]}`,
+		},
+		{
+			name:  "compact marker only in old history",
+			model: "gpt-5.6-sol-cc",
+			payload: fmt.Sprintf(`{"messages":[{"role":"user","content":[{"type":"text","text":%q}]},{"role":"assistant","content":"summary"},{"role":"user","content":"continue"},{"role":"system","content":"token budget"}]}`,
+				claudeCodeCompactPromptText),
+		},
+		{
+			name:    "gpt luna compact request",
+			model:   "gpt-5.6-luna-cc",
+			payload: compactPayload,
+		},
+		{
+			name:    "grok compact request remains unchanged",
+			model:   "grok-4.6-cc",
+			payload: compactPayload,
+		},
+		{
+			name:    "plain sol compact request",
+			model:   "gpt-5.6-sol",
+			payload: compactPayload,
+		},
+		{
+			name:    "malformed request",
+			model:   "gpt-5.6-sol-cc",
+			payload: `{"messages":`,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			out := forceTextForClaudeCodeCompactRequest(translatedBody, []byte(tc.payload), tc.model)
+			if string(out) != string(translatedBody) {
+				t.Fatalf("request changed unexpectedly: %s", string(out))
 			}
 		})
 	}
@@ -177,6 +282,18 @@ func TestNewGitHubCopilotStatusErrNormalizesSupportedPromptLimits(t *testing.T) 
 			body:  solContextWindowErrorBody,
 			want:  standardPromptTooLongErrorText,
 		},
+		{
+			name:  "gemini 3.8 flash direct context error",
+			model: "gemini-3.8-flash-cc",
+			body:  geminiPromptLimitErrorBody,
+			want:  standardPromptTooLongErrorText,
+		},
+		{
+			name:  "gemini 3.8 flash direct context error with suffixes",
+			model: "gemini-3.8-flash-cc[1m](high)",
+			body:  geminiPromptLimitErrorBody,
+			want:  standardPromptTooLongErrorText,
+		},
 	}
 
 	for _, tc := range tests {
@@ -189,6 +306,16 @@ func TestNewGitHubCopilotStatusErrNormalizesSupportedPromptLimits(t *testing.T) 
 				t.Fatalf("message = %q, want %q", err.msg, tc.want)
 			}
 		})
+	}
+}
+
+func TestNewGitHubCopilotStatusErrNormalizesGemini38PayloadLimit(t *testing.T) {
+	err := newGitHubCopilotStatusErr(http.StatusRequestEntityTooLarge, []byte("Request Entity Too Large"), "gemini-3.8-flash-cc[1m](high)")
+	if err.code != http.StatusBadRequest {
+		t.Fatalf("status code = %d, want %d", err.code, http.StatusBadRequest)
+	}
+	if err.msg != standardPromptTooLongErrorText {
+		t.Fatalf("message = %q, want %q", err.msg, standardPromptTooLongErrorText)
 	}
 }
 
@@ -226,10 +353,34 @@ func TestNewGitHubCopilotStatusErrLeavesUnrelatedErrorsUntouched(t *testing.T) {
 			body:   contextLimitBody,
 		},
 		{
+			name:   "plain gemini model",
+			status: http.StatusBadRequest,
+			model:  "gemini-3.8-flash",
+			body:   []byte(geminiPromptLimitErrorBody),
+		},
+		{
+			name:   "different gemini invalid request",
+			status: http.StatusBadRequest,
+			model:  "gemini-3.8-flash-cc",
+			body:   []byte(`{"error":{"message":"invalid tool schema","code":"invalid_request_body"}}`),
+		},
+		{
 			name:   "non bad request status",
 			status: http.StatusTooManyRequests,
 			model:  "grok-4.6-cc",
 			body:   contextLimitBody,
+		},
+		{
+			name:   "payload limit on plain gemini model",
+			status: http.StatusRequestEntityTooLarge,
+			model:  "gemini-3.8-flash",
+			body:   []byte("Request Entity Too Large"),
+		},
+		{
+			name:   "different payload limit body on gemini alias",
+			status: http.StatusRequestEntityTooLarge,
+			model:  "gemini-3.8-flash-cc",
+			body:   []byte("payload too large"),
 		},
 		{
 			name:   "ordinary bad request",
@@ -278,67 +429,67 @@ func TestNewGitHubCopilotStatusErrLeavesUnrelatedErrorsUntouched(t *testing.T) {
 
 func TestGitHubCopilotExecutePathsNormalizePromptLimit(t *testing.T) {
 	tests := []struct {
-		name         string
-		model        string
-		upstreamBody string
-		want         string
+		name           string
+		model          string
+		upstreamStatus int
+		upstreamBody   string
+		wantStatus     int
+		want           string
 	}{
 		{
-			name:         "grok 4.6",
-			model:        "grok-4.6-cc",
-			upstreamBody: grokPromptLimitErrorBody,
-			want:         "prompt is too long: 500271 tokens > 500000",
+			name:           "grok 4.6",
+			model:          "grok-4.6-cc",
+			upstreamStatus: http.StatusBadRequest,
+			upstreamBody:   grokPromptLimitErrorBody,
+			wantStatus:     http.StatusBadRequest,
+			want:           "prompt is too long: 500271 tokens > 500000",
 		},
 		{
-			name:         "gpt 5.6 sol",
-			model:        "gpt-5.6-sol-cc",
-			upstreamBody: solContextWindowErrorBody,
-			want:         standardPromptTooLongErrorText,
+			name:           "gpt 5.6 sol",
+			model:          "gpt-5.6-sol-cc",
+			upstreamStatus: http.StatusBadRequest,
+			upstreamBody:   solContextWindowErrorBody,
+			wantStatus:     http.StatusBadRequest,
+			want:           standardPromptTooLongErrorText,
+		},
+		{
+			name:           "gemini 3.8 flash context limit",
+			model:          "gemini-3.8-flash-cc",
+			upstreamStatus: http.StatusBadRequest,
+			upstreamBody:   geminiPromptLimitErrorBody,
+			wantStatus:     http.StatusBadRequest,
+			want:           standardPromptTooLongErrorText,
+		},
+		{
+			name:           "gemini 3.8 flash payload limit",
+			model:          "gemini-3.8-flash-cc[1m](high)",
+			upstreamStatus: http.StatusRequestEntityTooLarge,
+			upstreamBody:   copilotPayloadTooLargeMessage,
+			wantStatus:     http.StatusBadRequest,
+			want:           standardPromptTooLongErrorText,
 		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			testGitHubCopilotExecutePathsNormalizePromptLimit(t, tc.model, tc.upstreamBody, tc.want)
+			testGitHubCopilotExecutePathsNormalizePromptLimit(t, tc.model, tc.upstreamStatus, tc.upstreamBody, tc.wantStatus, tc.want)
 		})
 	}
 }
 
-func testGitHubCopilotExecutePathsNormalizePromptLimit(t *testing.T, model, upstreamBody, want string) {
+func testGitHubCopilotExecutePathsNormalizePromptLimit(t *testing.T, model string, upstreamStatus int, upstreamBody string, wantStatus int, want string) {
 	t.Helper()
 	transport := githubCopilotRoundTripFunc(func(req *http.Request) (*http.Response, error) {
 		return &http.Response{
-			StatusCode: http.StatusBadRequest,
+			StatusCode: upstreamStatus,
 			Header:     make(http.Header),
 			Body:       io.NopCloser(strings.NewReader(upstreamBody)),
 			Request:    req,
 		}, nil
 	})
+	installGitHubCopilotTestTransport(t, transport)
+	executor, auth := newGitHubCopilotTestExecutorAndAuth()
 
-	httpClientCacheMutex.Lock()
-	previousClient, hadPreviousClient := httpClientCache[""]
-	httpClientCache[""] = &http.Client{Transport: transport}
-	httpClientCacheMutex.Unlock()
-	t.Cleanup(func() {
-		httpClientCacheMutex.Lock()
-		defer httpClientCacheMutex.Unlock()
-		if hadPreviousClient {
-			httpClientCache[""] = previousClient
-		} else {
-			delete(httpClientCache, "")
-		}
-	})
-
-	const accessToken = "test-github-access-token"
-	executor := NewGitHubCopilotExecutor(nil)
-	executor.cache[accessToken] = &cachedAPIToken{
-		token:     "test-copilot-api-token",
-		expiresAt: time.Now().Add(time.Hour),
-	}
-	auth := &cliproxyauth.Auth{
-		ID:       "test-github-copilot-auth",
-		Metadata: map[string]any{"access_token": accessToken},
-	}
 	payload := []byte(fmt.Sprintf(`{"model":%q,"max_tokens":16,"messages":[{"role":"user","content":"hello"}]}`, model))
 	req := cliproxyexecutor.Request{Model: model, Payload: payload}
 	opts := cliproxyexecutor.Options{
@@ -362,7 +513,7 @@ func testGitHubCopilotExecutePathsNormalizePromptLimit(t *testing.T, model, upst
 			call: func(t *testing.T) error {
 				stream, err := executor.ExecuteStream(context.Background(), auth, req, opts)
 				if stream != nil {
-					t.Fatal("streaming bootstrap returned a stream for an upstream 400")
+					t.Fatalf("streaming bootstrap returned a stream for upstream status %d", upstreamStatus)
 				}
 				return err
 			},
@@ -379,11 +530,93 @@ func testGitHubCopilotExecutePathsNormalizePromptLimit(t *testing.T, model, upst
 				t.Fatalf("error = %q, want %q", got, want)
 			}
 			statusErr, ok := err.(interface{ StatusCode() int })
-			if !ok || statusErr.StatusCode() != http.StatusBadRequest {
-				t.Fatalf("status = %v, want %d", statusErr, http.StatusBadRequest)
+			if !ok || statusErr.StatusCode() != wantStatus {
+				t.Fatalf("status = %v, want %d", statusErr, wantStatus)
 			}
 		})
 	}
+}
+
+func TestGitHubCopilotExecutePathsForceTextForSolCompact(t *testing.T) {
+	var capturedBodies [][]byte
+	transport := githubCopilotRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		body, err := io.ReadAll(req.Body)
+		if err != nil {
+			return nil, err
+		}
+		capturedBodies = append(capturedBodies, append([]byte(nil), body...))
+		return &http.Response{
+			StatusCode: http.StatusBadRequest,
+			Header:     make(http.Header),
+			Body:       io.NopCloser(strings.NewReader(solContextWindowErrorBody)),
+			Request:    req,
+		}, nil
+	})
+	installGitHubCopilotTestTransport(t, transport)
+	executor, auth := newGitHubCopilotTestExecutorAndAuth()
+
+	payload := []byte(fmt.Sprintf(`{"model":"gpt-5.6-sol-cc","max_tokens":32000,"thinking":{"type":"adaptive"},"output_config":{"effort":"max"},"messages":[{"role":"user","content":"old context"},{"role":"user","content":[{"type":"text","text":%q}]},{"role":"system","content":"token budget"}],"tools":[{"name":"Bash","description":"Run a command","input_schema":{"type":"object"}}]}`, claudeCodeCompactPromptText))
+	req := cliproxyexecutor.Request{Model: "gpt-5.6-sol-cc", Payload: payload}
+	opts := cliproxyexecutor.Options{
+		OriginalRequest: payload,
+		SourceFormat:    sdktranslator.FromString("claude"),
+	}
+
+	_, nonStreamErr := executor.Execute(context.Background(), auth, req, opts)
+	if nonStreamErr == nil {
+		t.Fatal("non-streaming request unexpectedly succeeded")
+	}
+	stream, streamErr := executor.ExecuteStream(context.Background(), auth, req, opts)
+	if stream != nil || streamErr == nil {
+		t.Fatalf("streaming bootstrap = (%v, %v), want nil stream and error", stream, streamErr)
+	}
+
+	if len(capturedBodies) != 2 {
+		t.Fatalf("captured %d upstream requests, want 2", len(capturedBodies))
+	}
+	for i, body := range capturedBodies {
+		if got := gjson.GetBytes(body, "model").String(); got != "gpt-5.6-sol" {
+			t.Fatalf("request %d model = %q, want gpt-5.6-sol", i, got)
+		}
+		if got := gjson.GetBytes(body, "tool_choice").String(); got != "none" {
+			t.Fatalf("request %d tool_choice = %q, want none (body=%s)", i, got, string(body))
+		}
+		if got := gjson.GetBytes(body, "tools.#").Int(); got != 1 {
+			t.Fatalf("request %d tools count = %d, want 1", i, got)
+		}
+	}
+}
+
+func installGitHubCopilotTestTransport(t *testing.T, transport http.RoundTripper) {
+	t.Helper()
+
+	httpClientCacheMutex.Lock()
+	previousClient, hadPreviousClient := httpClientCache[""]
+	httpClientCache[""] = &http.Client{Transport: transport}
+	httpClientCacheMutex.Unlock()
+	t.Cleanup(func() {
+		httpClientCacheMutex.Lock()
+		defer httpClientCacheMutex.Unlock()
+		if hadPreviousClient {
+			httpClientCache[""] = previousClient
+		} else {
+			delete(httpClientCache, "")
+		}
+	})
+}
+
+func newGitHubCopilotTestExecutorAndAuth() (*GitHubCopilotExecutor, *cliproxyauth.Auth) {
+	const accessToken = "test-github-access-token"
+	executor := NewGitHubCopilotExecutor(nil)
+	executor.cache[accessToken] = &cachedAPIToken{
+		token:     "test-copilot-api-token",
+		expiresAt: time.Now().Add(time.Hour),
+	}
+	auth := &cliproxyauth.Auth{
+		ID:       "test-github-copilot-auth",
+		Metadata: map[string]any{"access_token": accessToken},
+	}
+	return executor, auth
 }
 
 func TestGitHubCopilotCountTokensClaude(t *testing.T) {

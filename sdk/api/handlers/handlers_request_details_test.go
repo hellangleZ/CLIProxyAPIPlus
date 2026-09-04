@@ -26,6 +26,7 @@ func TestGetRequestDetails_PreservesSuffix(t *testing.T) {
 	})
 	modelRegistry.RegisterClient("test-request-details-copilot", "github-copilot", []*registry.ModelInfo{
 		{ID: "gpt-5.6-sol-cc", Created: now + 10},
+		{ID: "gemini-3.8-flash-cc", Created: now + 9},
 	})
 
 	// Ensure cleanup of all test registrations.
@@ -105,6 +106,13 @@ func TestGetRequestDetails_PreservesSuffix(t *testing.T) {
 			inputModel:    "gpt-5.6-sol-cc[1m]",
 			wantProviders: []string{"github-copilot"},
 			wantModel:     "gpt-5.6-sol-cc[1m]",
+			wantErr:       false,
+		},
+		{
+			name:          "gemini context and thinking suffix preserved",
+			inputModel:    "gemini-3.8-flash-cc[1m](high)",
+			wantProviders: []string{"github-copilot"},
+			wantModel:     "gemini-3.8-flash-cc[1m](high)",
 			wantErr:       false,
 		},
 	}

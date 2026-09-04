@@ -508,6 +508,23 @@ func GetGitHubCopilotModels() []*ModelInfo {
 			SupportedEndpoints:  []string{"/chat/completions"},
 			Thinking:            &ThinkingSupport{Levels: []string{"none", "low", "medium", "high", "xhigh", "max"}, ZeroAllowed: true, DynamicAllowed: true},
 		},
+
+		// Gemini 3.8 Flash is Chat-Completions-only. Its client-facing alias
+		// still strips "-cc", but stays on /chat/completions instead of entering
+		// the native Responses bridge used by the aliases above.
+		{
+			ID:                  "gemini-3.8-flash-cc",
+			Object:              "model",
+			Created:             now,
+			OwnedBy:             "github-copilot",
+			Type:                "github-copilot",
+			DisplayName:         "Gemini 3.8 Flash (Claude-compatible)",
+			Description:         "Google Gemini 3.8 Flash via GitHub Copilot, bridged to the Claude Messages API",
+			ContextLength:       983040,
+			MaxCompletionTokens: 65536,
+			SupportedEndpoints:  []string{"/chat/completions"},
+			Thinking:            &ThinkingSupport{Levels: []string{"low", "medium", "high"}, DynamicAllowed: true},
+		},
 	}
 }
 

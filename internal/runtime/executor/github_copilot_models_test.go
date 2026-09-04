@@ -155,6 +155,28 @@ func TestParseCopilotModelsInferDefaultContextLength(t *testing.T) {
 	}
 }
 
+func TestParseCopilotModelsGemini38Capabilities(t *testing.T) {
+	body := []byte(`{"data":[{"id":"gemini-3.8-flash","vendor":"Google","capabilities":{"limits":{"max_context_window_tokens":1048576,"max_output_tokens":65536,"max_prompt_tokens":983040},"supports":{"parallel_tool_calls":true,"reasoning_effort":["low","medium","high"],"streaming":true,"tool_calls":true}}}]}`)
+	models := parseCopilotModels(body)
+	if len(models) != 1 {
+		t.Fatalf("expected 1 model, got %d", len(models))
+	}
+	model := models[0]
+	if model.ID != "gemini-3.8-flash" {
+		t.Fatalf("model ID = %q, want gemini-3.8-flash", model.ID)
+	}
+	if model.OwnedBy != "Google" {
+		t.Fatalf("owned by = %q, want Google", model.OwnedBy)
+	}
+	if model.ContextLength != 983040 {
+		t.Fatalf("context length = %d, want prompt limit 983040", model.ContextLength)
+	}
+	if model.MaxCompletionTokens != 65536 {
+		t.Fatalf("max completion tokens = %d, want 65536", model.MaxCompletionTokens)
+	}
+	assertEndpoints(t, model, []string{"/chat/completions"})
+}
+
 func TestFindStaticCopilotModel(t *testing.T) {
 	// Should find known models
 	m := findStaticCopilotModel("claude-opus-4.6")
@@ -183,6 +205,7 @@ func TestCopilotIntegrationIDForModel(t *testing.T) {
 		{"mai-code-1-flash", copilotIntegrationID},
 		{"mai-code-1-flash-secondary", copilotIntegrationID},
 		{"mai-code-1-flash-picker", copilotIntegrationID},
+		{"gemini-3.8-flash-cc[1m](high)", copilotIntegrationID},
 	}
 
 	for _, tt := range tests {
