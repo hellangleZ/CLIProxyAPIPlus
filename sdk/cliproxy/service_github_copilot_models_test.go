@@ -1,6 +1,40 @@
 package cliproxy
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/registry"
+)
+
+func TestMergeCopilotGPT6AccountLimits(t *testing.T) {
+	static := registry.GetGitHubCopilotModels()
+	for _, baseID := range []string{"gpt-6-sol", "gpt-6-luna", "gpt-6-astra"} {
+		t.Run(baseID, func(t *testing.T) {
+			dynamic := []*ModelInfo{{ID: baseID, ContextLength: 872000, MaxCompletionTokens: 128000}, {ID: "claude-opus-5.5"}}
+			got := mergeCopilotModels(dynamic, static)
+			assertCopilotModelIDs(t, got, []string{baseID, "claude-opus-5.5", baseID + "-cc"})
+			alias := got[2]
+			if alias.ContextLength != 872000 || alias.MaxCompletionTokens != 128000 {
+				t.Fatalf("alias limits = %d/%d", alias.ContextLength, alias.MaxCompletionTokens)
+			}
+			if len(alias.SupportedEndpoints) != 1 || alias.SupportedEndpoints[0] != "/chat/completions" || alias.Thinking == nil {
+				t.Fatalf("alias routing/thinking lost: %#v", alias)
+			}
+			dynamic[0].ContextLength = 272000
+			dynamic[0].MaxCompletionTokens = 64000
+			limited := mergeCopilotModels(dynamic, static)[2]
+			if limited.ContextLength != 272000 || limited.MaxCompletionTokens != 64000 || alias.ContextLength != 872000 {
+				t.Fatal("account limits leaked between registrations")
+			}
+			for _, definition := range static {
+				if definition.ID == baseID+"-cc" && definition.ContextLength != 872000 {
+					t.Fatal("static definition mutated")
+				}
+			}
+		})
+	}
+	assertCopilotModelIDs(t, mergeCopilotModels([]*ModelInfo{{ID: "other-account-model"}}, static), []string{"other-account-model"})
+}
 
 func TestMergeCopilotModelsUsesAccountEntitlements(t *testing.T) {
 	dynamic := []*ModelInfo{

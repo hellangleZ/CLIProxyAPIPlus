@@ -295,6 +295,15 @@ func parseCopilotModels(body []byte) []*registry.ModelInfo {
 			}
 		}
 
+		if strings.EqualFold(modelID, "claude-opus-5.5") {
+			if limit := rawItem.Get("capabilities.limits.max_prompt_tokens"); limit.Int() > 0 {
+				info.ContextLength = int(limit.Int())
+			}
+			if limit := rawItem.Get("capabilities.limits.max_output_tokens"); limit.Int() > 0 {
+				info.MaxCompletionTokens = int(limit.Int())
+			}
+		}
+
 		models = append(models, info)
 	}
 

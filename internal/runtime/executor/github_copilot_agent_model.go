@@ -8,7 +8,10 @@ import (
 	"github.com/tidwall/sjson"
 )
 
-const defaultClaudeSubagentModel = "sonnet"
+// Claude Code's Agent schema accepts model-family aliases rather than provider
+// model IDs. The Haiku alias routes repaired calls through
+// ANTHROPIC_DEFAULT_HAIKU_MODEL without emitting an invalid literal "grok".
+const grok46DefaultClaudeSubagentAlias = "haiku"
 
 // grok46AgentModelPolicy is enabled only when the client declared an Agent
 // schema that currently accepts our default. Reading the live schema avoids
@@ -36,7 +39,7 @@ func newGrok46AgentModelPolicy(bridgeActive bool, model string, originalRequest 
 		}
 		break
 	}
-	if _, acceptsDefault := allowed[defaultClaudeSubagentModel]; !acceptsDefault {
+	if _, acceptsDefault := allowed[grok46DefaultClaudeSubagentAlias]; !acceptsDefault {
 		return grok46AgentModelPolicy{}
 	}
 	return grok46AgentModelPolicy{enabled: true, allowed: allowed}
@@ -56,7 +59,7 @@ func (p grok46AgentModelPolicy) normalizeArguments(arguments string) string {
 			return arguments
 		}
 	}
-	updated, err := sjson.Set(arguments, "model", defaultClaudeSubagentModel)
+	updated, err := sjson.Set(arguments, "model", grok46DefaultClaudeSubagentAlias)
 	if err != nil {
 		return arguments
 	}

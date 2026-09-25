@@ -577,9 +577,14 @@ func isGrokClaudeBridgeModel(model string) bool {
 	return base == "grok-4.5-cc" || base == "grok-4.6-cc"
 }
 
-func isGPT56SolClaudeBridgeModel(model string) bool {
+func isGPTCompactClaudeBridgeModel(model string) bool {
 	base := strings.ToLower(strings.TrimSpace(copilotBaseModelName(model)))
-	return base == "gpt-5.6-sol-cc"
+	switch base {
+	case "gpt-5.6-sol-cc", "gpt-6-sol-cc", "gpt-6-luna-cc", "gpt-6-astra-cc":
+		return true
+	default:
+		return false
+	}
 }
 
 // isCopilotCLIModel reports whether the model requires the copilot-developer-cli

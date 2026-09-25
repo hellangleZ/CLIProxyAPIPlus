@@ -1131,7 +1131,12 @@ func mergeCopilotModels(dynamic, static []*ModelInfo) []*ModelInfo {
 // metadata while using the dynamically discovered per-account limits for models
 // whose Copilot entitlements vary between accounts.
 func accountScopedCopilotBridgeAlias(alias, base *ModelInfo) *ModelInfo {
-	if alias == nil || base == nil || !strings.EqualFold(strings.TrimSpace(alias.ID), "gemini-3.8-flash-cc") {
+	if alias == nil || base == nil {
+		return alias
+	}
+	switch strings.ToLower(strings.TrimSpace(alias.ID)) {
+	case "gemini-3.8-flash-cc", "gpt-6-sol-cc", "gpt-6-luna-cc", "gpt-6-astra-cc":
+	default:
 		return alias
 	}
 	clone := *alias

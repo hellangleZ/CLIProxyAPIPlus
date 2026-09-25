@@ -15,7 +15,7 @@ const (
 )
 
 func supportsCopilotPromptLimitNormalization(model string) bool {
-	return isGrokClaudeBridgeModel(model) || isGPT56SolClaudeBridgeModel(model) || isGemini38ClaudeBridgeModel(model)
+	return isGrokClaudeBridgeModel(model) || isGPTCompactClaudeBridgeModel(model) || isGemini38ClaudeBridgeModel(model)
 }
 
 // newGitHubCopilotStatusErr preserves upstream errors except for exact known
@@ -37,7 +37,7 @@ func newGitHubCopilotStatusErr(statusCode int, body []byte, model string) status
 	if outerCode.Type != gjson.String || outerCode.String() != "invalid_request_body" || outerMessage.Type != gjson.String {
 		return err
 	}
-	if isGPT56SolClaudeBridgeModel(model) && outerMessage.String() == copilotSolContextWindowExceededMessage {
+	if isGPTCompactClaudeBridgeModel(model) && outerMessage.String() == copilotSolContextWindowExceededMessage {
 		err.msg = "prompt is too long"
 		return err
 	}

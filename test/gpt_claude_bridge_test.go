@@ -147,7 +147,7 @@ func TestGptClaudeBridgeExplicitEffort(t *testing.T) {
 	var bridge []*registry.ModelInfo
 	for _, model := range registry.GetGitHubCopilotModels() {
 		switch model.ID {
-		case "gpt-5.6-sol-cc", "gpt-5.5-cc", "grok-4.5-cc", "grok-4.6-cc":
+		case "gpt-5.6-sol-cc", "gpt-5.5-cc", "grok-4.5-cc", "grok-4.6-cc", "gpt-6-sol-cc", "gpt-6-luna-cc", "gpt-6-astra-cc":
 			bridge = append(bridge, model)
 		}
 	}
@@ -161,6 +161,21 @@ func TestGptClaudeBridgeExplicitEffort(t *testing.T) {
 		wantError  bool
 	}{
 		{"gpt-5.6-sol-cc", "max", "max", false},
+		{"gpt-6-sol-cc", "low", "low", false},
+		{"gpt-6-sol-cc", "medium", "medium", false},
+		{"gpt-6-sol-cc", "high", "high", false},
+		{"gpt-6-sol-cc", "xhigh", "xhigh", false},
+		{"gpt-6-sol-cc", "max", "max", false},
+		{"gpt-6-luna-cc", "low", "low", false},
+		{"gpt-6-luna-cc", "medium", "medium", false},
+		{"gpt-6-luna-cc", "high", "high", false},
+		{"gpt-6-luna-cc", "xhigh", "xhigh", false},
+		{"gpt-6-luna-cc", "max", "max", false},
+		{"gpt-6-astra-cc", "low", "low", false},
+		{"gpt-6-astra-cc", "medium", "medium", false},
+		{"gpt-6-astra-cc", "high", "high", false},
+		{"gpt-6-astra-cc", "xhigh", "xhigh", false},
+		{"gpt-6-astra-cc", "max", "max", false},
 		{"gpt-5.5-cc", "xhigh", "xhigh", false},
 		{"gpt-5.5-cc", "max", "max", false},
 		{"grok-4.5-cc", "xhigh", "xhigh", false},

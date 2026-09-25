@@ -17,7 +17,7 @@ const (
 // contract while preserving tool definitions, history, and thinking settings.
 // Only models confirmed to need this guard are selected.
 func forceTextForClaudeCodeCompactRequest(body, originalPayload []byte, model string) []byte {
-	if (!isGPT56SolClaudeBridgeModel(model) && !isGemini38ClaudeBridgeModel(model)) || !isClaudeCodeCompactRequest(originalPayload) {
+	if (!isGPTCompactClaudeBridgeModel(model) && !isGemini38ClaudeBridgeModel(model)) || !isClaudeCodeCompactRequest(originalPayload) {
 		return body
 	}
 	tools := gjson.GetBytes(body, "tools")

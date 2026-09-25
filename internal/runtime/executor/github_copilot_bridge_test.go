@@ -43,6 +43,10 @@ func TestClaudeResponsesBridgeModel(t *testing.T) {
 		wantActive   bool
 	}{
 		{"sol bridge", "gpt-5.6-sol-cc", claude, "gpt-5.6-sol", true},
+		{"gpt 6 sol bridge", "gpt-6-sol-cc", claude, "gpt-6-sol", true},
+		{"gpt 6 luna bridge", "gpt-6-luna-cc[1m](max)", claude, "gpt-6-luna", true},
+		{"gpt 6 astra bridge", "gpt-6-astra-cc[1m](high)", claude, "gpt-6-astra", true},
+		{"opus 5.5 stays native", "claude-opus-5.5[1m]", claude, "claude-opus-5.5[1m]", false},
 		{"luna bridge", "gpt-5.6-luna-cc", claude, "gpt-5.6-luna", true},
 		{"terra bridge", "gpt-5.6-terra-cc", claude, "gpt-5.6-terra", true},
 		{"gpt 5.5 bridge", "gpt-5.5-cc", claude, "gpt-5.5", true},

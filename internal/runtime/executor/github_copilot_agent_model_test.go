@@ -27,27 +27,27 @@ func TestGitHubCopilotClaudeBridgeDefaultsGrok46AgentModel(t *testing.T) {
 		wantSet   bool
 	}{
 		{
-			name:      "invalid fast defaults to sonnet",
+			name:      "invalid fast defaults to haiku",
 			model:     "grok-4.6-cc",
 			toolName:  "Agent",
 			arguments: `{"description":"Review code","prompt":"Inspect the change","subagent_type":"Explore","model":"fast"}`,
-			wantModel: "sonnet",
+			wantModel: "haiku",
 			wantSet:   true,
 		},
 		{
-			name:      "missing model defaults to sonnet",
+			name:      "missing model defaults to haiku",
 			model:     "grok-4.6-cc[1m](high)",
 			toolName:  "Agent",
 			arguments: `{"description":"Review code","prompt":"Inspect the change","subagent_type":"Explore"}`,
-			wantModel: "sonnet",
+			wantModel: "haiku",
 			wantSet:   true,
 		},
 		{
 			name:      "valid explicit model is preserved",
 			model:     "grok-4.6-cc",
 			toolName:  "Agent",
-			arguments: `{"description":"Review code","prompt":"Inspect the change","subagent_type":"Explore","model":"haiku"}`,
-			wantModel: "haiku",
+			arguments: `{"description":"Review code","prompt":"Inspect the change","subagent_type":"Explore","model":"sonnet"}`,
+			wantModel: "sonnet",
 			wantSet:   true,
 		},
 		{
@@ -154,8 +154,8 @@ func TestGitHubCopilotClaudeBridgeDefaultsSplitGrok46AgentModelStream(t *testing
 		t.Fatalf("streamed Agent argument blocks = %d, want 2 (stream=%s)", len(arguments), output.String())
 	}
 	for index, wantPrompt := range []string{"Inspect the change", "Inspect test coverage"} {
-		if got := gjson.Get(arguments[index], "model").String(); got != "sonnet" {
-			t.Fatalf("streamed Agent %d model = %q, want sonnet (arguments=%s)", index, got, arguments[index])
+		if got := gjson.Get(arguments[index], "model").String(); got != "haiku" {
+			t.Fatalf("streamed Agent %d model = %q, want haiku (arguments=%s)", index, got, arguments[index])
 		}
 		if got := gjson.Get(arguments[index], "prompt").String(); got != wantPrompt {
 			t.Fatalf("streamed Agent %d prompt = %q, want %q (arguments=%s)", index, got, wantPrompt, arguments[index])
